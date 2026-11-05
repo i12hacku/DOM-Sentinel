@@ -8,6 +8,23 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 - **MINOR** — new features that keep working the same way for existing users
 - **PATCH** — bug fixes only
 
+## [Unreleased]
+
+### Added
+- Review findings as **Confirmed**, **False positive** or **Accepted risk**. Reviews are saved per site and reapplied automatically on every scan.
+- Review filter (Hide dismissed, Not reviewed, Confirmed, False positives, Accepted risks, All findings) and a "reviewed" progress count.
+- Undo after dismissing a finding, and a "dismissed" link in the header that shows dismissed findings.
+- Settings: delete all reviews saved for the current site.
+- Scan comparison: each scan is compared with the previous scan of the same page. The header shows how many findings are new, fixed and unchanged.
+- "New" flag on findings that appeared since the last scan, and **New since last scan** / **Fixed since last scan** options in the findings filter.
+- Markdown and JSON exports include the changes since the last scan and the list of fixed findings.
+- Settings: delete the scan history saved for the current site.
+
+### Changed
+- The severity bar, counts and tab badge now leave out dismissed findings.
+- Markdown export lists each finding's review and moves dismissed findings to their own section. JSON export adds a `review` field to each finding.
+- "Explain and prioritise findings" no longer sends dismissed findings to the AI.
+
 ## [2.1.0] - 2026-11-06
 
 ### Added

@@ -12,7 +12,12 @@ const state = {
   url: "",
   report: null,
   sevFilter: new Set(SEVS),
-  logs: []
+  logs: [],
+  triage: {},
+  triageOrigin: null,
+  view: "open",
+  openRows: new Set(),
+  diff: null
 };
 
 // ---------- tiny helpers ----------
@@ -38,9 +43,10 @@ async function send(type, extra = {}) {
   return res.data;
 }
 
-function setStatus(msg, isError = false) {
+function setStatus(msg, isError = false, action) {
   const s = $("status");
-  s.textContent = msg || "";
+  s.replaceChildren(msg || "");
+  if (action) s.append(" ", h("button", { class: "link", text: action.label, onclick: () => action.fn() }));
   s.classList.toggle("err", isError);
 }
 
@@ -120,6 +126,9 @@ async function loadReport() {
     const r = await send("GET_REPORT");
     if (r && sameDoc(r.url, state.url)) state.report = r;
   } catch (_) { /* ignore */ }
+  state.openRows.clear();
+  await loadTriage();
+  await syncHistory(false);
   renderAll();
 }
 
@@ -132,6 +141,9 @@ async function scan() {
   try {
     const report = await send("SCAN", { options: { active: $("activeToggle").checked } });
     state.report = report;
+    state.openRows.clear();
+    await loadTriage();
+    await syncHistory(true);
     const n = report.findings.length;
     setStatus(`Scanned in ${((performance.now() - t) / 1000).toFixed(1)}s. ${n} finding${n === 1 ? "" : "s"}.`);
     renderAll({ fresh: true });
@@ -142,12 +154,221 @@ async function scan() {
 
 function renderAll(opts = {}) {
   renderSpectrum(opts.fresh);
+  renderChanges();
   renderFindings();
   renderHidden();
   renderRecon();
-  const c = state.report?.counts;
+  updateBadge();
+}
+
+// ---------- triage ----------
+// Reviews are stored per origin in chrome.storage.local as
+//   "triage:<origin>" -> { <fingerprint>: { status, at, title } }
+// A fingerprint identifies "the same finding" across scans: category + title
+// (numbers normalised, so "3 inline handlers" == "5 inline handlers") + selector.
+// Secrets and cookies also include the first evidence line, so two different
+// leaked keys with the same title are reviewed separately.
+
+const TRIAGE = {
+  confirmed: { label: "Confirmed", hint: "A real issue that needs fixing" },
+  "false-positive": { label: "False positive", hint: "Not actually an issue. Hidden from the default view." },
+  accepted: { label: "Accepted risk", hint: "Known and accepted for now. Hidden from the default view." }
+};
+const DISMISSED = new Set(["false-positive", "accepted"]);
+
+function originOf(url) {
+  try { const o = new URL(url).origin; return o && o !== "null" ? o : null; } catch (_) { return null; }
+}
+
+function fingerprint(f) {
+  const parts = [f.category, String(f.title || "").replace(/\d+/g, "#"), f.selector || ""];
+  if (f.category === "Secrets & tokens" || f.category === "Cookies") {
+    parts.push(String(f.evidence || "").split("\n")[0].slice(0, 160));
+  }
+  return parts.join("|");
+}
+
+const statusOf = (f) => state.triage[fingerprint(f)]?.status || null;
+const activeFindings = () => (state.report?.findings || []).filter((f) => !DISMISSED.has(statusOf(f)));
+
+function countsOf(list) {
+  const c = { high: 0, medium: 0, low: 0, info: 0 };
+  for (const f of list) c[f.severity] += 1;
+  return c;
+}
+
+function viewShows(f) {
+  const status = statusOf(f);
+  switch (state.view) {
+    case "new": return isNew(f);
+    case "fixed": return false;
+    case "open": return !DISMISSED.has(status);
+    case "all": return true;
+    case "untriaged": return !status;
+    default: return status === state.view;
+  }
+}
+
+async function loadTriage() {
+  state.triageOrigin = originOf(state.report?.url || state.url);
+  state.triage = {};
+  if (!state.triageOrigin) return;
+  const key = "triage:" + state.triageOrigin;
+  try { state.triage = (await chrome.storage.local.get(key))[key] || {}; } catch (_) { state.triage = {}; }
+}
+
+async function saveTriage() {
+  if (!state.triageOrigin) return;
+  const key = "triage:" + state.triageOrigin;
+  if (Object.keys(state.triage).length) await chrome.storage.local.set({ [key]: state.triage });
+  else await chrome.storage.local.remove(key);
+}
+
+async function setTriage(f, status) {
+  if (!state.triageOrigin) return setStatus("Reviews can only be saved for http(s) pages.", true);
+  const fp = fingerprint(f);
+  const previous = state.triage[fp]?.status || null;
+  if (status) state.triage[fp] = { status, at: Date.now(), title: f.title };
+  else delete state.triage[fp];
+  try { await saveTriage(); } catch (e) { return setStatus("Couldn't save the review: " + e.message, true); }
+  renderSpectrum();
+  renderFindings();
+  updateBadge();
+  if (!status) setStatus("Review cleared.");
+  else if (!viewShows(f)) setStatus(`Marked as ${TRIAGE[status].label.toLowerCase()} and hidden.`, false, { label: "Undo", fn: () => setTriage(f, previous) });
+  else setStatus(`Marked as ${TRIAGE[status].label.toLowerCase()}.`);
+}
+
+function showAllFindings() {
+  state.view = "all";
+  $("triageView").value = "all";
+  renderFindings();
+}
+
+async function clearSiteTriage() {
+  const origin = originOf(state.report?.url || state.url);
+  if (!origin) return setStatus("Open an http(s) page first.", true);
+  const n = Object.keys(state.triage).length;
+  if (!n) { $("settingsStatus").textContent = `No reviews saved for ${origin}.`; return; }
+  if (!confirm(`Delete all ${n} review${n === 1 ? "" : "s"} saved for ${origin}?`)) return;
+  state.triage = {};
+  await saveTriage();
+  renderAll();
+  $("settingsStatus").textContent = `Deleted ${n} review${n === 1 ? "" : "s"} for ${origin}.`;
+}
+
+function updateBadge() {
+  const c = state.report ? countsOf(activeFindings()) : null;
   $("badge").textContent = c ? String(c.high + c.medium || "") : "";
 }
+
+// ---------- scan history & comparison ----------
+// For every page (origin + path) we keep the latest two scan snapshots in
+// chrome.storage.local as "history:<origin><path>" -> { latest, previous }.
+// A snapshot is { at, url, items: [{ fp, title, category, severity }] }.
+// The current report is compared with the snapshot taken before it.
+
+const MAX_SNAPSHOT_ITEMS = 500;
+
+function historyKey(url) {
+  try {
+    const u = new URL(url);
+    return u.origin && u.origin !== "null" ? "history:" + u.origin + u.pathname : null;
+  } catch (_) { return null; }
+}
+
+function snapshot(report) {
+  return {
+    at: report.scannedAt,
+    url: report.url,
+    items: report.findings.slice(0, MAX_SNAPSHOT_ITEMS).map((f) => ({ fp: fingerprint(f), title: f.title, category: f.category, severity: f.severity }))
+  };
+}
+
+// record = true right after a new scan: rotate latest -> previous and save the new snapshot.
+async function syncHistory(record) {
+  state.diff = null;
+  const r = state.report;
+  const key = r && historyKey(r.url);
+  if (!key) return;
+  let entry = {};
+  try { entry = (await chrome.storage.local.get(key))[key] || {}; } catch (_) { /* ignore */ }
+
+  if (record && entry.latest?.at !== r.scannedAt) {
+    entry = { previous: entry.latest || null, latest: snapshot(r) };
+    try { await chrome.storage.local.set({ [key]: entry }); } catch (_) { /* storage full: compare without saving */ }
+  }
+
+  const base = entry.latest?.at === r.scannedAt ? entry.previous
+    : entry.latest && entry.latest.at < r.scannedAt ? entry.latest
+    : null;
+  if (!base) { state.diff = { first: true, newFps: new Set(), fixed: [] }; return; }
+
+  const current = new Set(r.findings.map(fingerprint));
+  const before = new Set(base.items.map((i) => i.fp));
+  state.diff = {
+    first: false,
+    baselineAt: base.at,
+    newFps: new Set([...current].filter((fp) => !before.has(fp))),
+    fixed: base.items.filter((i) => !current.has(i.fp)),
+    unchanged: [...current].filter((fp) => before.has(fp)).length
+  };
+}
+
+const isNew = (f) => Boolean(state.diff?.newFps?.has(fingerprint(f)));
+const fmtWhen = (iso) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+function setView(view) {
+  state.view = view;
+  $("triageView").value = view;
+  renderFindings();
+}
+
+function renderChanges() {
+  const el = $("changes");
+  const d = state.diff;
+  if (!state.report || !d) { el.replaceChildren(); return; }
+  if (d.first) { el.replaceChildren("First scan of this page. Scan it again later to see what changed."); return; }
+  const n = d.newFps.size, m = d.fixed.length;
+  if (!n && !m) { el.replaceChildren(`No changes since the scan on ${fmtWhen(d.baselineAt)}.`); return; }
+  const parts = [`Since the scan on ${fmtWhen(d.baselineAt)}: `];
+  if (n) parts.push(h("button", { class: "link change-new", title: "Show new findings", onclick: () => setView("new") }, `${n} new`));
+  if (n && m) parts.push(", ");
+  if (m) parts.push(h("button", { class: "link change-fixed", title: "Show fixed findings", onclick: () => setView("fixed") }, `${m} fixed`));
+  parts.push(`, ${d.unchanged} unchanged.`);
+  el.replaceChildren(...parts);
+}
+
+function renderFixed(list) {
+  const d = state.diff;
+  if (!d || d.first || !d.fixed.length) {
+    list.replaceChildren(emptyState("Nothing fixed yet", d?.first ? "This is the first scan of this page, so there's nothing to compare with yet." : "Every finding from the last scan is still present."));
+    return;
+  }
+  list.replaceChildren(h("details", { class: "group", open: true },
+    h("summary", {}, `Fixed since ${fmtWhen(d.baselineAt)}`, h("span", { class: "count", text: String(d.fixed.length) })),
+    h("div", { class: "sheet" }, d.fixed.map((i) => h("div", { class: `row finding fixed-item ${i.severity}` },
+      h("div", { class: "head static" },
+        h("span", { class: "title" }, h("span", { class: "title-text", text: i.title }), h("span", { class: "flag fixed", text: "Fixed" })),
+        h("span", { class: "sev", text: i.severity })),
+      h("p", { class: "fixed-meta", text: i.category })
+    )))));
+}
+
+async function clearSiteHistory() {
+  const origin = originOf(state.report?.url || state.url);
+  if (!origin) return setStatus("Open an http(s) page first.", true);
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter((k) => k.startsWith("history:" + origin + "/"));
+  if (!keys.length) { $("settingsStatus").textContent = `No scan history saved for ${origin}.`; return; }
+  if (!confirm(`Delete scan history for ${keys.length} page${keys.length === 1 ? "" : "s"} on ${origin}?`)) return;
+  await chrome.storage.local.remove(keys);
+  state.diff = state.report ? { first: true, newFps: new Set(), fixed: [] } : null;
+  renderAll();
+  $("settingsStatus").textContent = `Deleted scan history for ${keys.length} page${keys.length === 1 ? "" : "s"} on ${origin}.`;
+}
+
+
 
 // ---------- threat spectrum (masthead) ----------
 
@@ -169,20 +390,23 @@ function renderSpectrum(fresh) {
     legend.replaceChildren(h("span", { class: "verdict", text: "Not scanned yet" }));
     return;
   }
-  const total = SEVS.reduce((n, s) => n + r.counts[s], 0);
-  bar.setAttribute("aria-label", SEVS.map((s) => `${r.counts[s]} ${s}`).join(", "));
+  const counts = countsOf(activeFindings());
+  const total = SEVS.reduce((n, s) => n + counts[s], 0);
+  const dismissed = r.findings.length - total;
+  const dismissedLink = dismissed ? h("button", { class: "dismissed", title: "Show dismissed findings", onclick: showAllFindings }, `${dismissed} dismissed`) : null;
+  bar.setAttribute("aria-label", SEVS.map((s) => `${counts[s]} ${s}`).join(", ") + (dismissed ? `, ${dismissed} dismissed` : ""));
   if (!total) {
     bar.classList.add("clean");
     bar.replaceChildren();
-    legend.replaceChildren(h("span", { class: "verdict", text: "No findings on this page." }));
+    legend.replaceChildren(h("span", { class: "verdict", text: dismissed ? "Every finding has been dismissed." : "No findings on this page." }), dismissedLink || "");
     return;
   }
   bar.classList.add("has-data");
   if (fresh) bar.classList.add("fresh");
-  bar.replaceChildren(...SEVS.filter((s) => r.counts[s]).map((s) => h("button", {
+  bar.replaceChildren(...SEVS.filter((s) => counts[s]).map((s) => h("button", {
     class: `seg ${s}${state.sevFilter.has(s) ? "" : " off"}`,
-    style: `flex: ${r.counts[s]} 1 0`,
-    title: `${r.counts[s]} ${s}. Click to show or hide.`,
+    style: `flex: ${counts[s]} 1 0`,
+    title: `${counts[s]} ${s}. Click to show or hide.`,
     tabindex: "-1",
     onclick: () => toggleSev(s)
   })));
@@ -191,7 +415,7 @@ function renderSpectrum(fresh) {
     "aria-pressed": String(state.sevFilter.has(s)),
     title: `Show or hide ${s} findings`,
     onclick: () => toggleSev(s)
-  }, h("b", { text: String(r.counts[s]) }), s)));
+  }, h("b", { text: String(counts[s]) }), s)), dismissedLink || "");
 }
 
 // ---------- findings ----------
@@ -215,7 +439,10 @@ function renderFindings() {
     return;
   }
   const q = $("search").value.trim().toLowerCase();
-  const shown = r.findings.filter((f) => state.sevFilter.has(f.severity) && (!q || `${f.title} ${f.category} ${f.description} ${f.evidence}`.toLowerCase().includes(q)));
+  const reviewed = r.findings.filter((f) => statusOf(f)).length;
+  $("reviewProgress").textContent = r.findings.length ? `${reviewed} of ${r.findings.length} reviewed` : "";
+  if (state.view === "fixed") { renderFixed(list); return; }
+  const shown = r.findings.filter((f) => state.sevFilter.has(f.severity) && viewShows(f) && (!q || `${f.title} ${f.category} ${f.description} ${f.evidence}`.toLowerCase().includes(q)));
   const groups = new Map();
   for (const f of shown) {
     if (!groups.has(f.category)) groups.set(f.category, []);
@@ -227,11 +454,22 @@ function renderFindings() {
       h("summary", {}, cat, h("span", { class: "count", text: String(items.length) })),
       h("div", { class: "sheet" }, items.map(findingRow))));
   }
-  list.replaceChildren(...(nodes.length ? nodes : [emptyState("Nothing matches", q ? `No findings contain "${q}". Clear the filter or switch severities back on in the bar above.` : "Every severity with findings is switched off. Click one in the bar above to show it again.")]));
+  list.replaceChildren(...(nodes.length ? nodes : [emptyFindings(q)]));
+}
+
+function emptyFindings(q) {
+  if (q) return emptyState("Nothing matches", `No findings contain "${q}". Clear the filter, or choose All findings in the review filter.`);
+  if (state.view === "new") return emptyState("Nothing new", state.diff?.first ? "This is the first scan of this page, so there's nothing to compare with yet." : "No findings appeared since the last scan.");
+  if (state.view === "untriaged") return emptyState("Everything is reviewed", "Every finding on this page has a review. Choose All findings to see them.");
+  if (state.view === "open") return emptyState("Nothing left to review", "Every finding is marked as a false positive or an accepted risk, or its severity is switched off in the bar above.");
+  if (state.view !== "all") return emptyState("No findings with this review", `No findings are marked as ${TRIAGE[state.view].label.toLowerCase()} yet.`);
+  return emptyState("Nothing matches", "Every severity with findings is switched off. Click one in the bar above to show it again.");
 }
 
 function findingRow(f) {
-  const row = h("div", { class: `row finding ${f.severity}` });
+  const status = statusOf(f);
+  const fp = fingerprint(f);
+  const row = h("div", { class: `row finding ${f.severity}${status ? " t-" + status : ""}${state.openRows.has(fp) ? " open" : ""}` });
   const actions = h("div", { class: "actions" });
   if (f.selector) {
     actions.append(h("button", { class: "link", text: "Highlight on page", onclick: () => highlight(f.selector) }));
@@ -241,18 +479,36 @@ function findingRow(f) {
   actions.append(h("button", { class: "link", text: "Copy finding", onclick: () => copyText(findingText(f)) }));
   const head = h("button", {
     class: "head",
-    "aria-expanded": "false",
-    onclick: () => { const open = row.classList.toggle("open"); head.setAttribute("aria-expanded", String(open)); }
-  }, h("span", { class: "title", text: f.title }), h("span", { class: "sev", text: f.severity }));
+    "aria-expanded": String(state.openRows.has(fp)),
+    onclick: () => {
+      const open = row.classList.toggle("open");
+      head.setAttribute("aria-expanded", String(open));
+      if (open) state.openRows.add(fp); else state.openRows.delete(fp);
+    }
+  },
+  h("span", { class: "title" },
+    h("span", { class: "title-text", text: f.title }),
+    isNew(f) ? h("span", { class: "flag new", text: "New" }) : null,
+    status ? h("span", { class: `flag t-${status}`, text: TRIAGE[status].label }) : null),
+  h("span", { class: "sev", text: f.severity }));
+  const review = h("div", { class: "review", role: "group", "aria-label": "Review this finding" },
+    Object.entries(TRIAGE).map(([key, t]) => h("button", {
+      class: `review-btn t-${key}`,
+      "aria-pressed": String(status === key),
+      title: status === key ? "Click again to clear the review" : t.hint,
+      text: t.label,
+      onclick: () => setTriage(f, status === key ? null : key)
+    })));
   row.append(head, h("div", { class: "body" },
     f.description ? h("p", { text: f.description }) : null,
     f.evidence ? h("pre", { text: f.evidence }) : null,
     f.recommendation ? h("div", { class: "fix" }, h("b", { text: "How to fix or verify" }), h("span", { text: f.recommendation })) : null,
+    review,
     actions));
   return row;
 }
 
-const findingText = (f) => `[${f.severity.toUpperCase()}] ${f.title}\nCategory: ${f.category}\n\n${f.description}\n\nEvidence:\n${f.evidence || "-"}\n\nRecommendation: ${f.recommendation || "-"}`;
+const findingText = (f) => `[${f.severity.toUpperCase()}] ${f.title}\nCategory: ${f.category}${statusOf(f) ? "\nReview: " + TRIAGE[statusOf(f)].label : ""}\n\n${f.description}\n\nEvidence:\n${f.evidence || "-"}\n\nRecommendation: ${f.recommendation || "-"}`;
 
 async function highlight(selector, ref) {
   try {
@@ -489,7 +745,8 @@ async function writeElement() {
 async function aiExplain() {
   $("aiOut").textContent = "Asking AI…";
   try {
-    const r = await send("AI_EXPLAIN");
+    const excludeIds = (state.report?.findings || []).filter((f) => DISMISSED.has(statusOf(f))).map((f) => f.id);
+    const r = await send("AI_EXPLAIN", { excludeIds });
     $("aiOut").textContent = `(${r.model})\n\n${r.text}`;
   } catch (e) { $("aiOut").textContent = "✖ " + e.message; }
 }
@@ -524,16 +781,40 @@ async function saveSettings() {
 // ---------- export ----------
 
 function toMarkdown(r) {
-  const lines = [`# Security scan: ${r.title || r.url}`, "", `- URL: ${r.url}`, `- Scanned: ${r.scannedAt}`, `- Summary: ${SEVS.map((s) => `${r.counts[s]} ${s}`).join(", ")}`, ""];
+  const active = activeFindings();
+  const dismissed = r.findings.filter((f) => DISMISSED.has(statusOf(f)));
+  const counts = countsOf(active);
+  const reviewed = r.findings.filter((f) => statusOf(f)).length;
+  const lines = [
+    `# Security scan: ${r.title || r.url}`, "",
+    `- URL: ${r.url}`,
+    `- Scanned: ${r.scannedAt}`,
+    `- Open findings: ${SEVS.map((s) => `${counts[s]} ${s}`).join(", ")}`,
+    `- Reviewed: ${reviewed} of ${r.findings.length}${dismissed.length ? ` (${dismissed.length} dismissed, listed at the end)` : ""}`,
+    state.diff && !state.diff.first ? `- Since ${state.diff.baselineAt}: ${state.diff.newFps.size} new, ${state.diff.fixed.length} fixed, ${state.diff.unchanged} unchanged` : "- Changes: first scan of this page",
+    ""
+  ];
+  const item = (f) => {
+    const st = statusOf(f);
+    lines.push(`### ${f.title}`, `*${f.category}*${isNew(f) ? " · **New**" : ""}${st ? ` · **${TRIAGE[st].label}**` : ""}`, "", f.description, "");
+    if (f.evidence) lines.push("```", f.evidence, "```", "");
+    if (f.recommendation) lines.push(`**Recommendation:** ${f.recommendation}`, "");
+  };
   for (const s of SEVS) {
-    const fs = r.findings.filter((f) => f.severity === s);
+    const fs = active.filter((f) => f.severity === s);
     if (!fs.length) continue;
     lines.push(`## ${s.toUpperCase()} (${fs.length})`, "");
-    for (const f of fs) {
-      lines.push(`### ${f.title}`, `*${f.category}*`, "", f.description, "");
-      if (f.evidence) lines.push("```", f.evidence, "```", "");
-      if (f.recommendation) lines.push(`**Recommendation:** ${f.recommendation}`, "");
-    }
+    fs.forEach(item);
+  }
+  if (dismissed.length) {
+    lines.push(`## Dismissed (${dismissed.length})`, "");
+    for (const f of dismissed) lines.push(`- **${TRIAGE[statusOf(f)].label}** · ${f.severity} · ${f.title}`);
+    lines.push("");
+  }
+  if (state.diff?.fixed?.length) {
+    lines.push(`## Fixed since last scan (${state.diff.fixed.length})`, "");
+    for (const i of state.diff.fixed) lines.push(`- ${i.severity} · ${i.title} (${i.category})`);
+    lines.push("");
   }
   return lines.join("\n");
 }
@@ -544,7 +825,15 @@ function exportReport(kind) {
   const host = new URL(r.url).hostname.replace(/[^a-z0-9.-]/gi, "_");
   const stamp = r.scannedAt.slice(0, 19).replace(/[:T]/g, "-");
   if (kind === "md") download(`scan-${host}-${stamp}.md`, toMarkdown(r), "text/markdown");
-  else download(`scan-${host}-${stamp}.json`, JSON.stringify(r, null, 2), "application/json");
+  else {
+    const d = state.diff;
+    const withReviews = {
+      ...r,
+      findings: r.findings.map((f) => ({ ...f, review: statusOf(f), isNew: isNew(f) })),
+      changes: d && !d.first ? { comparedWith: d.baselineAt, new: d.newFps.size, fixed: d.fixed, unchanged: d.unchanged } : null
+    };
+    download(`scan-${host}-${stamp}.json`, JSON.stringify(withReviews, null, 2), "application/json");
+  }
 }
 
 // ---------- tabs & wiring ----------
@@ -560,6 +849,9 @@ function wire() {
   $("scanBtn").addEventListener("click", () => busy($("scanBtn"), scan));
   $("activeToggle").addEventListener("change", () => chrome.storage.local.set({ activeChecks: $("activeToggle").checked }));
   $("search").addEventListener("input", renderFindings);
+  $("triageView").addEventListener("change", (e) => { state.view = e.target.value; renderFindings(); });
+  $("clearTriage").addEventListener("click", clearSiteTriage);
+  $("clearHistory").addEventListener("click", clearSiteHistory);
   $("exportMd").addEventListener("click", () => exportReport("md"));
   $("exportJson").addEventListener("click", () => exportReport("json"));
 

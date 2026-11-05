@@ -18,6 +18,7 @@
 
     <div id="spectrum" class="spectrum" role="img" aria-label="Not scanned yet"></div>
     <div id="summary" class="legend" role="group" aria-label="Filter by severity"></div>
+    <p id="changes" class="changes" aria-live="polite"></p>
 
     <div class="masthead-foot">
       <label class="switch" title="Also requests a few well-known sensitive paths on this origin (/.git/HEAD, /.env, robots.txt…). Use only on sites you are authorised to test.">
@@ -44,6 +45,19 @@
         <input id="search" type="search" placeholder="Filter findings" aria-label="Filter findings">
         <button id="exportMd" class="btn" title="Download a Markdown report">Export .md</button>
         <button id="exportJson" class="btn" title="Download the raw JSON report">.json</button>
+      </div>
+      <div class="toolbar review-bar">
+        <select id="triageView" aria-label="Show findings">
+          <option value="open">Hide dismissed</option>
+          <option value="new">New since last scan</option>
+          <option value="fixed">Fixed since last scan</option>
+          <option value="untriaged">Not reviewed</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="false-positive">False positives</option>
+          <option value="accepted">Accepted risks</option>
+          <option value="all">All findings</option>
+        </select>
+        <span id="reviewProgress" class="note"></span>
       </div>
       <div id="findings" class="list"></div>
     </section>
@@ -148,6 +162,12 @@
         <button id="testAi" class="btn">Test AI</button>
       </div>
       <p id="settingsStatus" class="note"></p>
+      <h2 class="section-title">Reviews</h2>
+      <p class="lede">Reviews you give findings (confirmed, false positive, accepted risk) are saved per site in this browser and reapplied on every scan.</p>
+      <div class="toolbar"><button id="clearTriage" class="btn">Delete reviews for this site</button></div>
+      <h2 class="section-title">Scan history</h2>
+      <p class="lede">The last two scans of each page are kept in this browser so new scans can show what's new and what's fixed.</p>
+      <div class="toolbar"><button id="clearHistory" class="btn">Delete scan history for this site</button></div>
       <h2 class="section-title">What gets checked</h2>
       <p class="lede">Passive scans read this page, its response headers, cookies and scripts. Active checks also request a handful of well-known paths on the same origin. Only test sites you own or are authorised to test.</p>
     </section>

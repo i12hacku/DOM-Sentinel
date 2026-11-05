@@ -42,7 +42,15 @@
         sendMessage: async (m) => m.type === "GET_REPORT" ? { ok: true, data: sample } : m.type === "READ_CONSOLE" ? { ok: true, data: { hook: true, logs: [{ ts: Date.now(), level: "error", text: "TypeError: x is undefined" }, { ts: Date.now(), level: "csp-violation", text: "'script-src' blocked https://evil.test/x.js" }] } } : { ok: true, data: {} },
         onMessage: { addListener: noop }
       },
-      storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} }, session: { remove: async () => {} } },
+      storage: {
+        local: {
+          _d: {},
+          async get(keys) { const ks = keys == null ? Object.keys(this._d) : [].concat(keys); return Object.fromEntries(ks.filter((k) => k in this._d).map((k) => [k, structuredClone(this._d[k])])); },
+          async set(o) { Object.assign(this._d, structuredClone(o)); },
+          async remove(keys) { for (const k of [].concat(keys)) delete this._d[k]; }
+        },
+        session: { remove: async () => {} }
+      },
       tabs: { query: async () => [{ id: 1, url: sample.url }], onActivated: { addListener: noop }, onUpdated: { addListener: noop } },
       windows: { getCurrent: async () => ({ id: 1 }) }
     };

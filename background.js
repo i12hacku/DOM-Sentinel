@@ -45,10 +45,11 @@ const handlers = {
   START_PICKER: ({ tabId }) => agent(tabId, "startPicker", []),
   READ_CONSOLE: ({ tabId }) => readConsole(tabId),
   RUN_JS: ({ tabId, code }) => runJs(tabId, code),
-  AI_EXPLAIN: async ({ tabId }) => {
+  AI_EXPLAIN: async ({ tabId, excludeIds }) => {
     const report = await handlers.GET_REPORT({ tabId });
     if (!report) throw new Error("Run a scan first.");
-    return callAi(explainPrompt(report), { temperature: 0.2 });
+    const skip = new Set(Array.isArray(excludeIds) ? excludeIds : []);
+    return callAi(explainPrompt({ ...report, findings: report.findings.filter((f) => !skip.has(f.id)) }), { temperature: 0.2 });
   },
   AI_SCRIPT: async ({ tabId, task }) => {
     if (!task?.trim()) throw new Error("Describe what the script should do.");

@@ -368,3 +368,61 @@ body:not(.devtools) .devtools-only { display: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- triage / reviews ---------- */
+
+.review-bar { margin-top: 0; }
+.review-bar select { max-width: 180px; }
+
+.legend .dismissed { font-size: 12px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; }
+.legend .dismissed:hover { color: var(--ink); }
+
+.finding .title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+
+.review { display: flex; flex-wrap: wrap; margin: 0 0 10px; }
+.review-btn {
+  background: var(--sheet); color: var(--ink-2);
+  border: 1px solid var(--rule);
+  padding: 4px 10px;
+  font: 500 12.5px/1.3 var(--display);
+  cursor: pointer;
+}
+.review-btn + .review-btn { margin-left: -1px; }
+.review-btn:first-child { border-radius: var(--r-sm) 0 0 var(--r-sm); }
+.review-btn:last-child { border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+.review-btn:hover { color: var(--ink); position: relative; }
+.review-btn:focus-visible { position: relative; z-index: 1; }
+.review-btn[aria-pressed="true"] { position: relative; z-index: 1; color: var(--sheet); }
+.review-btn.t-confirmed[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); }
+.review-btn.t-false-positive[aria-pressed="true"] { background: var(--info); border-color: var(--info); }
+.review-btn.t-accepted[aria-pressed="true"] { background: var(--medium); border-color: var(--medium); }
+
+.flag.t-confirmed { color: var(--ink); border-color: var(--ink); background: none; }
+.flag.t-false-positive { color: var(--info); }
+.flag.t-accepted { color: var(--medium); border-color: color-mix(in srgb, var(--medium) 45%, transparent); background: none; }
+
+/* Dismissed findings (visible only under "All findings" or their own filter). */
+.finding.t-false-positive .title-text,
+.finding.t-accepted .title-text { color: var(--ink-2); }
+.finding.t-false-positive .title-text { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--ink-2) 60%, transparent); }
+.finding.t-false-positive::before,
+.finding.t-accepted::before { opacity: 0.35; }
+
+.status .link { font-size: 12px; margin-left: 2px; }
+
+/* ---------- scan comparison ---------- */
+
+.changes { margin: 6px 0 0; font-size: 12px; color: var(--ink-2); min-height: 0; }
+.changes:empty { display: none; }
+.changes .link { font-size: 12px; font-weight: 600; }
+.changes .change-new { color: var(--cobalt); }
+.changes .change-fixed { color: var(--ok); }
+
+.flag.new { color: var(--cobalt); border-color: color-mix(in srgb, var(--cobalt) 50%, transparent); background: color-mix(in srgb, var(--cobalt) 8%, transparent); }
+.flag.fixed { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: none; }
+
+.finding .head.static { cursor: default; }
+.finding .head.static:hover { background: none; }
+.finding.fixed-item::before { background: var(--ok); }
+.finding.fixed-item .title-text { color: var(--ink-2); }
+.fixed-meta { margin: -4px 0 0; padding: 0 12px 8px 14px; font-size: 12px; color: var(--ink-2); }
