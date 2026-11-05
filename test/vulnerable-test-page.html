@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DTA test target (intentionally insecure)</title>
+  <!-- TODO: remove admin backdoor before release, creds admin/admin123 -->
+  <script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
+</head>
+<body>
+  <h1>Intentionally insecure test page</h1>
+  <p>Open with <code>?q=hello-reflect</code> and scan it with the extension.</p>
+
+  <form method="POST" action="/login">
+    <input name="user" placeholder="user">
+    <input type="password" name="pass" placeholder="password">
+    <input type="hidden" name="role" value="user">
+    <input type="hidden" name="price" value="49.99">
+    <button>Login</button>
+  </form>
+
+  <div id="adminPanel" style="display:none">
+    <h2>Admin tools</h2>
+    <a href="/admin/delete-user">Delete user</a>
+    <button>Export database</button>
+  </div>
+
+  <div class="dropdown-menu" hidden><a href="/profile">Profile</a></div>
+  <div style="position:absolute; left:-9999px">Debug: internal build 1.2.3</div>
+  <button disabled>Premium feature</button>
+
+  <a href="https://example.org" target="_blank">external</a>
+  <img src="x.png" onerror="this.remove()">
+
+  <div id="out"></div>
+  <script>
+    var config = { apiKey: "AKIA" + "ZZZZZZZZZZZZZZZZ", debug: true };
+    var stripe_secret = "sk_live_" + "abcdefghijklmnopqrstuvwx";
+    var q = new URLSearchParams(location.search).get("q");
+    if (q) document.getElementById("out").innerHTML = "You searched: " + q;
+    window.addEventListener("message", function (e) { document.getElementById("out").innerHTML = e.data; });
+    localStorage.setItem("auth_token", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlc2ln");
+  </script>
+</body>
+</html>

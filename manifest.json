@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "DOM Sentinel – DevTools Security Assistant",
+  "version": "2.0.0",
+  "description": "Passive client-side security scanner: headers, cookies, secrets, hidden elements, DOM XSS hints, console capture, with optional AI explanations.",
+  "minimum_chrome_version": "116",
+  "permissions": ["scripting", "storage", "tabs", "webRequest", "cookies", "sidePanel"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "ui/panel.html"
+  },
+  "devtools_page": "devtools/devtools.html",
+  "action": {
+    "default_title": "Open DOM Sentinel"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["injected/console-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

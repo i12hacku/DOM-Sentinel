@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DOM Sentinel</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">⛨</span><strong>DOM Sentinel</strong><span id="mode" class="mode"></span></div>
+    <div id="target" class="target" title="">No tab</div>
+    <div class="scanbar">
+      <button id="scanBtn" class="primary">Scan page</button>
+      <label class="toggle" title="Also request a few well-known sensitive paths (/.git/HEAD, /.env, robots.txt…) on this origin. Only use on sites you are authorized to test.">
+        <input type="checkbox" id="activeToggle"> Active checks
+      </label>
+      <span id="status" class="status"></span>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="findings" class="active">Findings <span id="badge" class="badge"></span></button>
+    <button data-tab="hidden">Hidden</button>
+    <button data-tab="recon">Recon</button>
+    <button data-tab="console">Console</button>
+    <button data-tab="inspector">Inspector</button>
+    <button data-tab="ai">AI</button>
+    <button data-tab="settings">⚙</button>
+  </nav>
+
+  <main>
+    <!-- Findings -->
+    <section id="tab-findings" class="tab active">
+      <div id="summary" class="summary"></div>
+      <div class="row">
+        <input id="search" type="search" placeholder="Filter findings…">
+        <button id="exportMd" class="ghost" title="Download Markdown report">⬇ MD</button>
+        <button id="exportJson" class="ghost" title="Download JSON report">⬇ JSON</button>
+      </div>
+      <div id="findings" class="list"><p class="empty">Click <b>Scan page</b> to analyse the current tab. Scanning is local — nothing is sent anywhere unless you use the AI tab.</p></div>
+    </section>
+
+    <!-- Hidden -->
+    <section id="tab-hidden" class="tab">
+      <div class="row">
+        <button id="revealInteresting">Reveal interesting</button>
+        <button id="revealAll">Reveal all</button>
+        <button id="restoreHidden" class="ghost">Restore</button>
+      </div>
+      <label class="toggle"><input type="checkbox" id="onlyInteresting" checked> Only interesting (forms, inputs, links, keywords)</label>
+      <p id="hiddenSummary" class="muted"></p>
+      <div id="hiddenList" class="list"></div>
+    </section>
+
+    <!-- Recon -->
+    <section id="tab-recon" class="tab">
+      <div id="recon" class="list"><p class="empty">Scan first.</p></div>
+    </section>
+
+    <!-- Console -->
+    <section id="tab-console" class="tab">
+      <div class="row">
+        <select id="logLevel">
+          <option value="">All levels</option>
+          <option value="error">Errors</option>
+          <option value="warn">Warnings</option>
+          <option value="csp">CSP violations</option>
+          <option value="log">Logs</option>
+        </select>
+        <button id="refreshLogs" class="ghost">Refresh</button>
+      </div>
+      <div id="logs" class="logs"></div>
+
+      <h3>Run JavaScript in page</h3>
+      <div class="row">
+        <select id="snippets"><option value="">Snippets…</option></select>
+      </div>
+      <textarea id="code" class="code" rows="8" spellcheck="false" placeholder="document.querySelectorAll('input[type=hidden]')"></textarea>
+      <div class="row">
+        <button id="runCode" class="primary">Run ▶</button>
+        <span class="muted small" id="runHint"></span>
+      </div>
+      <pre id="runOut" class="out"></pre>
+    </section>
+
+    <!-- Inspector -->
+    <section id="tab-inspector" class="tab">
+      <div class="row">
+        <input id="selector" type="text" placeholder="CSS selector, e.g. form#login input[name=role]">
+      </div>
+      <div class="row">
+        <button id="pickBtn">⌖ Pick on page</button>
+        <button id="useSelected" class="devtools-only">Use $0</button>
+        <button id="readBtn">Read</button>
+        <button id="highlightBtn" class="ghost">Highlight</button>
+        <button id="revealInElements" class="ghost devtools-only">Show in Elements</button>
+      </div>
+      <pre id="elementOut" class="out"></pre>
+      <h3>Modify element</h3>
+      <div class="row">
+        <select id="writeOp">
+          <option value="value">Set value</option>
+          <option value="text">Set text</option>
+          <option value="html">Set inner HTML</option>
+          <option value="attribute">Set attribute</option>
+          <option value="remove-attribute">Remove attribute</option>
+          <option value="enable">Enable (remove disabled/readonly)</option>
+          <option value="show">Unhide</option>
+          <option value="style">Set inline style</option>
+          <option value="remove">Remove element</option>
+        </select>
+        <input id="attrName" type="text" placeholder="attribute name" class="narrow">
+      </div>
+      <textarea id="writeValue" rows="3" placeholder="value / HTML / color:red; display:block !important"></textarea>
+      <div class="row"><button id="writeBtn">Apply</button></div>
+      <p class="muted small">Changes are local to your browser tab — useful to test whether the server re-validates what the UI restricts.</p>
+    </section>
+
+    <!-- AI -->
+    <section id="tab-ai" class="tab">
+      <p class="muted small">Optional. Sends the <b>findings summary</b> (not the page HTML or cookies) to Google Gemini using your own API key.</p>
+      <div class="row"><button id="aiExplain" class="primary">Explain &amp; prioritise findings</button></div>
+      <h3>Generate a DevTools script</h3>
+      <textarea id="aiTask" rows="3" placeholder="e.g. List every element with an event listener for 'message' and print the handler source"></textarea>
+      <div class="row"><button id="aiScript">Generate → Console tab</button></div>
+      <pre id="aiOut" class="out"></pre>
+    </section>
+
+    <!-- Settings -->
+    <section id="tab-settings" class="tab">
+      <h3>AI (optional)</h3>
+      <label for="aiKeys">Gemini API key(s) — one per line, used in order</label>
+      <textarea id="aiKeys" rows="3" spellcheck="false" placeholder="AIza…"></textarea>
+      <label for="aiModel">Model (<code>auto</code> picks the best available model for your key)</label>
+      <input id="aiModel" type="text" placeholder="auto">
+      <div class="row">
+        <button id="saveSettings" class="primary">Save</button>
+        <button id="testAi" class="ghost">Test AI</button>
+      </div>
+      <p id="settingsStatus" class="muted small"></p>
+      <h3>About</h3>
+      <p class="muted small">Passive checks read the page, response headers, cookies and the page's scripts. Active checks additionally request a handful of well-known paths on the same origin. Only test sites you own or are authorised to test.</p>
+    </section>
+  </main>
+
+  <script src="panel.js"></script>
+</body>
+</html>

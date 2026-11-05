@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel preview (stubbed chrome API)</title>
+  <link rel="stylesheet" href="../ui/panel.css">
+  <style>body { max-width: 420px; border-right: 1px solid #333; min-height: 100vh; }</style>
+</head>
+<body>
+  <!-- UI-only preview: serve the project folder over http and open this file.
+       The chrome.* API is stubbed with a fake report so you can iterate on layout. -->
+  <script>
+    const sample = {
+      url: "https://shop.example.test/login?q=hello", title: "Shop", scannedAt: new Date().toISOString(), durationMs: 1830, activeChecks: false,
+      counts: { high: 2, medium: 3, low: 2, info: 1 },
+      findings: [
+        { id: 0, category: "Secrets & tokens", severity: "high", title: "AWS access key ID exposed", description: "A value matching AWS key is shipped to the browser.", evidence: "AKIAZZ…ZZZZ (20 chars)\nfound in: window.config", recommendation: "Rotate it." },
+        { id: 1, category: "Forms", severity: "high", title: "Password form submitted over plain HTTP", description: "Credentials can be read on the network.", evidence: "<form method=POST action=/login>…", selector: "form", recommendation: "Use HTTPS." },
+        { id: 2, category: "Hidden elements", severity: "medium", title: "Hidden <div> containing keyword \"Admin\", 1 button(s)", description: "Element is hidden via display:none.", evidence: "<div id=adminPanel style=display:none>…", selector: "#adminPanel", recommendation: "Test authorization server-side." },
+        { id: 3, category: "Security headers", severity: "medium", title: "No Content-Security-Policy", description: "Without CSP any XSS runs.", evidence: "Header absent", recommendation: "Add a strict CSP." },
+        { id: 4, category: "Vulnerable libraries", severity: "medium", title: "jQuery 1.12.4 has known vulnerabilities", description: "CVE-2020-11022", evidence: "jQuery 1.12.4", recommendation: "Upgrade." },
+        { id: 5, category: "Hidden elements", severity: "low", title: "Client-controlled hidden field \"price\"", description: "Editable by the user.", evidence: "<input type=hidden name=price value=49.99>", selector: "input[name=price]", recommendation: "Re-validate." },
+        { id: 6, category: "DOM XSS hints", severity: "low", title: "query parameter \"q\" is reflected in page text", description: "Reflected input.", evidence: "…You searched: hello…", recommendation: "Encode output." },
+        { id: 7, category: "Security headers", severity: "info", title: "No Permissions-Policy header", description: "", evidence: "", recommendation: "" }
+      ],
+      hidden: [
+        { ref: 0, selector: "#adminPanel", tag: "div", reason: "display:none", interesting: true, why: ["keyword \"Admin\"", "1 button(s)", "1 link(s)"], text: "Admin tools Delete user Export database", html: "<div id=\"adminPanel\" style=\"display:none\">…</div>" },
+        { ref: 1, selector: "body > div:nth-of-type(2)", tag: "div", reason: "hidden attribute", interesting: false, isWidget: true, why: ["1 link(s)"], text: "Profile", html: "<div class=\"dropdown-menu\" hidden>…" }
+      ],
+      hiddenTotal: 2, storage: { localStorage: [{ key: "auth_token", size: 65, preview: "eyJhbGci…" }], sessionStorage: [] },
+      cookies: [{ name: "PHPSESSID", domain: "shop.example.test", path: "/", httpOnly: false, secure: false, sameSite: "unspecified", session: true, size: 26 }],
+      headers: { via: "webRequest", statusCode: 200, list: [{ name: "server", value: "Apache/2.4.29" }, { name: "x-powered-by", value: "PHP/7.1" }] },
+      libraries: [{ name: "jQuery", version: "1.12.4", how: "jQuery.fn.jquery" }],
+      globals: [{ name: "config", type: "object", preview: "{\"apiKey\":\"AKIA…\"}" }],
+      scripts: [{ url: "https://code.jquery.com/jquery-1.12.4.min.js", size: 97163, sameSite: false }],
+      endpoints: [{ url: "/api/v1/users/", from: "inline <script> #3", interesting: true, external: false }],
+      consoleHook: true, stats: { elements: 27, forms: 1, scripts: 3, iframes: 0 }
+    };
+    const noop = () => {};
+    window.chrome = {
+      runtime: {
+        sendMessage: async (m) => m.type === "GET_REPORT" ? { ok: true, data: sample } : m.type === "READ_CONSOLE" ? { ok: true, data: { hook: true, logs: [{ ts: Date.now(), level: "error", text: "TypeError: x is undefined" }, { ts: Date.now(), level: "csp-violation", text: "'script-src' blocked https://evil.test/x.js" }] } } : { ok: true, data: {} },
+        onMessage: { addListener: noop }
+      },
+      storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} }, session: { remove: async () => {} } },
+      tabs: { query: async () => [{ id: 1, url: sample.url }], onActivated: { addListener: noop }, onUpdated: { addListener: noop } },
+      windows: { getCurrent: async () => ({ id: 1 }) }
+    };
+  </script>
+  <script>
+    // Load the real panel markup + script.
+    fetch("../ui/panel.html").then((r) => r.text()).then((html) => {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      document.body.append(...doc.body.children);
+      const s = document.createElement("script");
+      s.src = "../ui/panel.js";
+      document.body.append(s);
+    });
+  </script>
+</body>
+</html>

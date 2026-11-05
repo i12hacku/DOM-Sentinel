@@ -1,0 +1,16 @@
+# Local tooling
+.claude/
+
+# Legacy v1 code (kept locally for reference)
+old_v1/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Packaged builds
+*.zip
+*.crx
+*.pem
