@@ -85,6 +85,20 @@ const fmtBytes = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : n > 1e3 ? Math
 
 // ---------- target tab ----------
 
+function setTarget(url) {
+  const el = $("target");
+  el.title = url || "";
+  let host = "No tab", path = "";
+  try {
+    const u = new URL(url);
+    host = u.host || u.protocol;
+    path = u.pathname + u.search;
+  } catch (_) { host = url || "No tab"; }
+  const parts = [h("span", { class: "host", text: host })];
+  if (path && path !== "/") parts.push(h("span", { class: "path", text: path }));
+  el.replaceChildren(...parts);
+}
+
 async function resolveTarget() {
   if (IS_DEVTOOLS) {
     state.tabId = chrome.devtools.inspectedWindow.tabId;
@@ -96,8 +110,7 @@ async function resolveTarget() {
     state.tabId = tab?.id ?? null;
     state.url = tab?.url || "";
   }
-  $("target").textContent = state.url || "No tab";
-  $("target").title = state.url;
+  setTarget(state.url);
   await loadReport();
 }
 
@@ -113,15 +126,22 @@ async function loadReport() {
 // ---------- scanning ----------
 
 async function scan() {
-  setStatus("Scanning…");
+  setStatus("Scanning headers, cookies, scripts and the DOM…");
+  document.body.classList.add("scanning");
   const t = performance.now();
-  const report = await send("SCAN", { options: { active: $("activeToggle").checked } });
-  state.report = report;
-  setStatus(`Done in ${((performance.now() - t) / 1000).toFixed(1)}s — ${report.findings.length} findings.`);
-  renderAll();
+  try {
+    const report = await send("SCAN", { options: { active: $("activeToggle").checked } });
+    state.report = report;
+    const n = report.findings.length;
+    setStatus(`Scanned in ${((performance.now() - t) / 1000).toFixed(1)}s. ${n} finding${n === 1 ? "" : "s"}.`);
+    renderAll({ fresh: true });
+  } finally {
+    document.body.classList.remove("scanning");
+  }
 }
 
-function renderAll() {
+function renderAll(opts = {}) {
+  renderSpectrum(opts.fresh);
   renderFindings();
   renderHidden();
   renderRecon();
@@ -129,20 +149,69 @@ function renderAll() {
   $("badge").textContent = c ? String(c.high + c.medium || "") : "";
 }
 
+// ---------- threat spectrum (masthead) ----------
+
+function toggleSev(s) {
+  if (state.sevFilter.has(s)) state.sevFilter.delete(s); else state.sevFilter.add(s);
+  if (!state.sevFilter.size) SEVS.forEach((x) => state.sevFilter.add(x)); // never filter everything away
+  renderSpectrum();
+  renderFindings();
+}
+
+function renderSpectrum(fresh) {
+  const r = state.report;
+  const bar = $("spectrum");
+  const legend = $("summary");
+  bar.className = "spectrum";
+  if (!r) {
+    bar.replaceChildren();
+    bar.setAttribute("aria-label", "Not scanned yet");
+    legend.replaceChildren(h("span", { class: "verdict", text: "Not scanned yet" }));
+    return;
+  }
+  const total = SEVS.reduce((n, s) => n + r.counts[s], 0);
+  bar.setAttribute("aria-label", SEVS.map((s) => `${r.counts[s]} ${s}`).join(", "));
+  if (!total) {
+    bar.classList.add("clean");
+    bar.replaceChildren();
+    legend.replaceChildren(h("span", { class: "verdict", text: "No findings on this page." }));
+    return;
+  }
+  bar.classList.add("has-data");
+  if (fresh) bar.classList.add("fresh");
+  bar.replaceChildren(...SEVS.filter((s) => r.counts[s]).map((s) => h("button", {
+    class: `seg ${s}${state.sevFilter.has(s) ? "" : " off"}`,
+    style: `flex: ${r.counts[s]} 1 0`,
+    title: `${r.counts[s]} ${s}. Click to show or hide.`,
+    tabindex: "-1",
+    onclick: () => toggleSev(s)
+  })));
+  legend.replaceChildren(...SEVS.map((s) => h("button", {
+    class: s,
+    "aria-pressed": String(state.sevFilter.has(s)),
+    title: `Show or hide ${s} findings`,
+    onclick: () => toggleSev(s)
+  }, h("b", { text: String(r.counts[s]) }), s)));
+}
+
 // ---------- findings ----------
+
+function emptyState(title, text, bullets) {
+  return h("div", { class: "empty" },
+    h("h2", { text: title }),
+    h("p", { text }),
+    bullets ? h("ul", {}, bullets.map((b) => h("li", { text: b }))) : null);
+}
 
 function renderFindings() {
   const r = state.report;
-  const summary = $("summary");
-  summary.replaceChildren(...SEVS.map((s) => h("div", {
-    class: `chip ${s}${state.sevFilter.has(s) ? "" : " off"}`,
-    title: "Click to show/hide",
-    onclick: () => { state.sevFilter.has(s) ? state.sevFilter.delete(s) : state.sevFilter.add(s); renderFindings(); }
-  }, h("b", { text: String(r?.counts?.[s] ?? 0) }), s)));
-
   const list = $("findings");
   if (!r) {
-    list.replaceChildren(h("p", { class: "empty" }, "Click ", h("b", { text: "Scan page" }), " to analyse the current tab. Scanning is local — nothing is sent anywhere unless you use the AI tab."));
+    list.replaceChildren(emptyState(
+      "Scan this page to see its weak spots",
+      "Scan page checks this tab and lists what it finds, worst first. Everything runs in your browser.",
+      ["Security headers and cookie flags", "Secrets and tokens in scripts, storage and comments", "Hidden forms, links and admin controls", "Reflected input and other DOM XSS hints", "Outdated libraries with known vulnerabilities"]
+    ));
     return;
   }
   const q = $("search").value.trim().toLowerCase();
@@ -155,32 +224,32 @@ function renderFindings() {
   const nodes = [];
   for (const [cat, items] of groups) {
     nodes.push(h("details", { class: "group", open: true },
-      h("summary", { text: `${cat} (${items.length})` }),
-      items.map(findingCard)));
+      h("summary", {}, cat, h("span", { class: "count", text: String(items.length) })),
+      h("div", { class: "sheet" }, items.map(findingRow))));
   }
-  list.replaceChildren(...(nodes.length ? nodes : [h("p", { class: "empty", text: "No findings match the current filter." })]));
+  list.replaceChildren(...(nodes.length ? nodes : [emptyState("Nothing matches", q ? `No findings contain "${q}". Clear the filter or switch severities back on in the bar above.` : "Every severity with findings is switched off. Click one in the bar above to show it again.")]));
 }
 
-function findingCard(f) {
-  const card = h("div", { class: `finding ${f.severity}` });
+function findingRow(f) {
+  const row = h("div", { class: `row finding ${f.severity}` });
   const actions = h("div", { class: "actions" });
   if (f.selector) {
-    actions.append(h("button", { class: "small", text: "Highlight", onclick: () => highlight(f.selector) }));
-    actions.append(h("button", { class: "small", text: "Inspector", onclick: () => openInInspector(f.selector) }));
-    if (IS_DEVTOOLS) actions.append(h("button", { class: "small", text: "Show in Elements", onclick: () => showInElements(f.selector) }));
+    actions.append(h("button", { class: "link", text: "Highlight on page", onclick: () => highlight(f.selector) }));
+    actions.append(h("button", { class: "link", text: "Open in Inspector", onclick: () => openInInspector(f.selector) }));
+    if (IS_DEVTOOLS) actions.append(h("button", { class: "link", text: "Show in Elements", onclick: () => showInElements(f.selector) }));
   }
-  actions.append(h("button", { class: "small ghost", text: "Copy", onclick: () => copyText(findingText(f)) }));
-  card.append(
-    h("div", { class: "head", onclick: () => card.classList.toggle("open") },
-      h("span", { class: `sev ${f.severity}`, text: f.severity }),
-      h("span", { text: f.title })),
-    h("div", { class: "body" },
-      h("p", { text: f.description }),
-      f.evidence ? h("pre", { text: f.evidence }) : null,
-      f.recommendation ? h("p", { class: "fix", text: "→ " + f.recommendation }) : null,
-      actions)
-  );
-  return card;
+  actions.append(h("button", { class: "link", text: "Copy finding", onclick: () => copyText(findingText(f)) }));
+  const head = h("button", {
+    class: "head",
+    "aria-expanded": "false",
+    onclick: () => { const open = row.classList.toggle("open"); head.setAttribute("aria-expanded", String(open)); }
+  }, h("span", { class: "title", text: f.title }), h("span", { class: "sev", text: f.severity }));
+  row.append(head, h("div", { class: "body" },
+    f.description ? h("p", { text: f.description }) : null,
+    f.evidence ? h("pre", { text: f.evidence }) : null,
+    f.recommendation ? h("div", { class: "fix" }, h("b", { text: "How to fix or verify" }), h("span", { text: f.recommendation })) : null,
+    actions));
+  return row;
 }
 
 const findingText = (f) => `[${f.severity.toUpperCase()}] ${f.title}\nCategory: ${f.category}\n\n${f.description}\n\nEvidence:\n${f.evidence || "-"}\n\nRecommendation: ${f.recommendation || "-"}`;
@@ -188,14 +257,14 @@ const findingText = (f) => `[${f.severity.toUpperCase()}] ${f.title}\nCategory: 
 async function highlight(selector, ref) {
   try {
     const r = await send("HIGHLIGHT", { selector, ref });
-    setStatus(r?.hidden ? `Element is hidden (${r.hidden}) — use Reveal to see it.` : "Highlighted on page.");
+    setStatus(r?.hidden ? `That element is hidden (${r.hidden}). Reveal it to see it.` : "Highlighted on the page.");
   } catch (e) { setStatus(e.message, true); }
 }
 
 async function showInElements(selector) {
   try {
     const found = await devtoolsEval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (e) inspect(e); return !!e; })()`);
-    setStatus(found ? "Selected in Elements panel." : "Element not found.", !found);
+    setStatus(found ? "Selected in the Elements panel." : "Element not found. The page may have changed; scan again.", !found);
   } catch (e) { setStatus(e.message, true); }
 }
 
@@ -210,33 +279,40 @@ function openInInspector(selector) {
 function renderHidden() {
   const r = state.report;
   const list = $("hiddenList");
-  if (!r) { $("hiddenSummary").textContent = ""; list.replaceChildren(h("p", { class: "empty", text: "Scan first." })); return; }
+  if (!r) {
+    $("hiddenSummary").textContent = "";
+    list.replaceChildren(emptyState("No scan yet", "Scan the page to list its hidden elements."));
+    return;
+  }
   const only = $("onlyInteresting").checked;
   const items = (r.hidden || []).filter((x) => !only || x.interesting);
   const interesting = (r.hidden || []).filter((x) => x.interesting).length;
-  $("hiddenSummary").textContent = `${r.hiddenTotal} hidden element tree(s) found, ${interesting} look interesting. Showing ${items.length}.`;
-  list.replaceChildren(...items.map((x) => h("div", { class: "item" },
-    h("div", {},
-      h("span", { class: "tag" + (x.interesting ? " bad" : ""), text: x.interesting ? "interesting" : x.isWidget ? "ui widget" : "hidden" }),
-      h("span", { class: "tag", text: x.reason }),
+  $("hiddenSummary").textContent = `${r.hiddenTotal} hidden element${r.hiddenTotal === 1 ? "" : "s"}, ${interesting} worth a look.`;
+  if (!items.length) {
+    list.replaceChildren(emptyState(only ? "Nothing suspicious is hidden" : "No hidden elements", only ? "No hidden forms, inputs, links or sensitive keywords. Untick the filter to see every hidden element." : "This page doesn't hide any content."));
+    return;
+  }
+  list.replaceChildren(h("div", { class: "sheet" }, items.map((x) => h("div", { class: "row item" },
+    h("div", { class: "line" },
+      x.interesting ? h("span", { class: "flag warn", text: "Worth a look" }) : x.isWidget ? h("span", { class: "flag", text: "UI widget" }) : null,
+      h("span", { class: "flag", text: x.reason }),
       h("code", { text: x.selector })),
-    x.why.length ? h("div", { class: "meta", text: x.why.join(" · ") }) : null,
-    x.text ? h("div", { class: "meta", text: "“" + x.text + "”" }) : null,
-    h("details", {}, h("summary", { class: "meta", text: "HTML" }), h("pre", { class: "out", text: x.html })),
+    x.why.length ? h("div", { class: "meta", text: "Contains " + x.why.join(", ") }) : null,
+    x.text ? h("div", { class: "meta", text: `Text: ${x.text}` }) : null,
+    h("details", {}, h("summary", { text: "HTML source" }), h("pre", { class: "out", text: x.html })),
     h("div", { class: "actions" },
-      h("button", { class: "small", text: "Reveal", onclick: () => reveal(true, false, x.ref) }),
-      h("button", { class: "small", text: "Highlight", onclick: () => highlight(x.selector, x.ref) }),
-      h("button", { class: "small ghost", text: "Inspector", onclick: () => openInInspector(x.selector) }),
-      IS_DEVTOOLS ? h("button", { class: "small ghost", text: "Elements", onclick: () => showInElements(x.selector) }) : null)
-  )));
-  if (!items.length) list.append(h("p", { class: "empty", text: only ? "No interesting hidden elements. Untick the filter to see everything." : "No hidden elements found." }));
+      h("button", { class: "link", text: "Reveal", onclick: () => reveal(true, false, x.ref) }),
+      h("button", { class: "link", text: "Highlight", onclick: () => highlight(x.selector, x.ref) }),
+      h("button", { class: "link", text: "Open in Inspector", onclick: () => openInInspector(x.selector) }),
+      IS_DEVTOOLS ? h("button", { class: "link", text: "Show in Elements", onclick: () => showInElements(x.selector) }) : null)
+  ))));
 }
 
 async function reveal(on, onlyInteresting, ref) {
   try {
     const r = await send("REVEAL_HIDDEN", { on, onlyInteresting, ref });
-    if (on) setStatus(r.revealed ? `Revealed ${r.revealed} element(s) (pink dashed outline).` : "Nothing revealed — the page changed, rescan first.", !r.revealed);
-    else setStatus(`Restored ${r.restored} element(s).`);
+    if (on) setStatus(r.revealed ? `Revealed ${r.revealed} element${r.revealed === 1 ? "" : "s"}, outlined in pink. Restore puts them back.` : "Nothing to reveal. The page changed since the scan; scan again.", !r.revealed);
+    else setStatus(`Restored ${r.restored} element${r.restored === 1 ? "" : "s"}.`);
     if (on && typeof ref === "number") highlight(null, ref);
   } catch (e) { setStatus(e.message, true); }
 }
@@ -244,61 +320,66 @@ async function reveal(on, onlyInteresting, ref) {
 // ---------- recon ----------
 
 function section(title, count, ...content) {
-  return h("details", { class: "group" }, h("summary", { text: `${title}${count != null ? ` (${count})` : ""}` }), ...content);
+  return h("details", { class: "group" }, h("summary", {}, title, count != null ? h("span", { class: "count", text: String(count) }) : null), ...content);
 }
 
 function kv(pairs) {
   return h("div", { class: "kv" }, pairs.flatMap(([k, v]) => [h("span", { text: k }), h("code", { text: v })]));
 }
 
+const rows = (items, fn) => (items.length ? h("div", { class: "sheet" }, items.map((x) => h("div", { class: "row item" }, fn(x)))) : h("p", { class: "note", text: "None found." }));
+
 function renderRecon() {
   const r = state.report;
   const el = $("recon");
-  if (!r) { el.replaceChildren(h("p", { class: "empty", text: "Scan first." })); return; }
+  if (!r) { el.replaceChildren(emptyState("No scan yet", "Scan the page to see its headers, cookies, libraries, endpoints and scripts.")); return; }
   const parts = [];
 
-  parts.push(kv([
+  parts.push(h("div", { class: "sheet" }, kv([
     ["Scanned", new Date(r.scannedAt).toLocaleString() + ` (${(r.durationMs / 1000).toFixed(1)}s)`],
     ["Elements", String(r.stats?.elements)],
-    ["Forms / scripts / iframes", `${r.stats?.forms} / ${r.stats?.scripts} / ${r.stats?.iframes}`],
-    ["Console capture", r.consoleHook ? "active" : "inactive (reload the page)"],
-    ["Active checks", r.activeChecks ? "yes" : "no"]
-  ]));
+    ["Forms, scripts, iframes", `${r.stats?.forms}, ${r.stats?.scripts}, ${r.stats?.iframes}`],
+    ["Console capture", r.consoleHook ? "On" : "Off. Reload the page to turn it on."],
+    ["Active checks", r.activeChecks ? "Included" : "Not run"]
+  ])));
 
   if (r.headers) parts.push(section("Response headers", r.headers.list.length,
-    h("p", { class: "muted small", text: `HTTP ${r.headers.statusCode} via ${r.headers.via}` }),
-    kv(r.headers.list.map((x) => [x.name, x.value]))));
+    h("div", { class: "sheet" }, h("p", { class: "note", style: "padding: 8px 12px 0; margin: 0", text: `HTTP ${r.headers.statusCode}, captured via ${r.headers.via}` }), kv(r.headers.list.map((x) => [x.name, x.value])))));
 
-  parts.push(section("Cookies", r.cookies.length, r.cookies.map((c) => h("div", { class: "item" },
-    h("code", { text: c.name }), " ",
-    h("span", { class: "tag " + (c.httpOnly ? "good" : "bad"), text: c.httpOnly ? "HttpOnly" : "JS-readable" }),
-    h("span", { class: "tag " + (c.secure ? "good" : "bad"), text: c.secure ? "Secure" : "not Secure" }),
-    h("span", { class: "tag", text: "SameSite=" + c.sameSite }),
-    h("span", { class: "tag", text: c.session ? "session" : "persistent" }),
-    h("div", { class: "meta", text: `${c.domain}${c.path} · ${c.size} chars` })))));
+  parts.push(section("Cookies", r.cookies.length, rows(r.cookies, (c) => [
+    h("div", { class: "line" },
+      h("code", { text: c.name }),
+      h("span", { class: "flag " + (c.httpOnly ? "good" : "warn"), text: c.httpOnly ? "HttpOnly" : "Readable by JS" }),
+      h("span", { class: "flag " + (c.secure ? "good" : "warn"), text: c.secure ? "Secure" : "Not Secure" }),
+      h("span", { class: "flag", text: "SameSite " + c.sameSite }),
+      h("span", { class: "flag", text: c.session ? "Session" : "Persistent" })),
+    h("div", { class: "meta", text: `${c.domain}${c.path}, ${c.size} characters` })])));
 
-  parts.push(section("Libraries", r.libraries?.length || 0, (r.libraries || []).map((l) => h("div", { class: "item" }, h("b", { text: l.name }), " ", h("code", { text: l.version || "version unknown" }), h("span", { class: "meta", text: "  via " + l.how })))));
+  parts.push(section("Libraries", r.libraries?.length || 0, rows(r.libraries || [], (l) =>
+    h("div", { class: "line" }, h("b", { text: l.name }), h("code", { text: l.version || "version unknown" }), h("span", { class: "meta", text: "detected via " + l.how })))));
 
   const ep = r.endpoints || [];
-  parts.push(section("Endpoints & URLs in code", ep.length,
-    h("div", { class: "actions" }, h("button", { class: "small ghost", text: "Copy all", onclick: () => copyText(ep.map((e) => e.url).join("\n")) })),
-    ep.map((e) => h("div", { class: "item" },
-      e.interesting ? h("span", { class: "tag bad", text: "interesting" }) : null,
-      e.external ? h("span", { class: "tag", text: "external" }) : null,
-      h("code", { text: e.url }),
-      h("div", { class: "meta", text: "in " + e.from })))));
+  parts.push(section("Endpoints and URLs in code", ep.length,
+    ep.length ? h("div", { class: "toolbar" }, h("button", { class: "btn", text: "Copy all URLs", onclick: () => copyText(ep.map((e) => e.url).join("\n")) })) : null,
+    rows(ep, (e) => [
+      h("div", { class: "line" },
+        e.interesting ? h("span", { class: "flag warn", text: "Worth a look" }) : null,
+        e.external ? h("span", { class: "flag", text: "External" }) : null,
+        h("code", { text: e.url })),
+      h("div", { class: "meta", text: "Found in " + e.from })])));
 
-  parts.push(section("Scripts", r.scripts?.length || 0, (r.scripts || []).map((s) => h("div", { class: "item" },
-    h("span", { class: "tag", text: s.sameSite ? "first-party" : "third-party" }), h("code", { text: s.url }), h("span", { class: "meta", text: "  " + fmtBytes(s.size) })))));
+  parts.push(section("Scripts", r.scripts?.length || 0, rows(r.scripts || [], (s) =>
+    h("div", { class: "line" }, h("span", { class: "flag", text: s.sameSite ? "First-party" : "Third-party" }), h("code", { text: s.url }), h("span", { class: "meta", text: fmtBytes(s.size) })))));
 
   const st = r.storage || {};
   const storageItems = [...(st.localStorage || []).map((x) => ["localStorage", x]), ...(st.sessionStorage || []).map((x) => ["sessionStorage", x])];
-  parts.push(section("Web Storage", storageItems.length, storageItems.map(([area, x]) => h("div", { class: "item" },
-    h("span", { class: "tag", text: area }), h("code", { text: x.key }), h("div", { class: "meta", text: x.preview })))));
+  parts.push(section("Web Storage", storageItems.length, rows(storageItems, ([area, x]) => [
+    h("div", { class: "line" }, h("span", { class: "flag", text: area }), h("code", { text: x.key })),
+    h("div", { class: "meta", text: x.preview })])));
 
-  parts.push(section("Custom globals (window.*)", r.globals?.length || 0, (r.globals || []).map((g) => h("div", { class: "item" },
-    h("code", { text: "window." + g.name }), h("span", { class: "meta", text: "  " + g.type }),
-    g.preview ? h("div", { class: "meta", text: g.preview }) : null))));
+  parts.push(section("Custom globals on window", r.globals?.length || 0, rows(r.globals || [], (g) => [
+    h("div", { class: "line" }, h("code", { text: "window." + g.name }), h("span", { class: "meta", text: g.type })),
+    g.preview ? h("div", { class: "meta", text: g.preview }) : null])));
 
   el.replaceChildren(...parts);
 }
@@ -314,6 +395,8 @@ async function refreshLogs() {
   } catch (e) { setStatus(e.message, true); }
 }
 
+const LEVEL_NAMES = { "csp-violation": "CSP", "resource-error": "load fail", uncaught: "uncaught", unhandledrejection: "rejection" };
+
 function renderLogs() {
   const level = $("logLevel").value;
   const match = (l) => !level ||
@@ -323,7 +406,7 @@ function renderLogs() {
     (level === "log" && /^(log|info|debug)$/.test(l.level));
   const box = $("logs");
   box.replaceChildren(...state.logs.filter(match).slice(-300).map((l) =>
-    h("div", { class: `log ${l.level}` }, h("span", { class: "lvl", text: `${new Date(l.ts).toLocaleTimeString()} ${l.level}` }), l.text)));
+    h("div", { class: `log ${l.level}`, title: new Date(l.ts).toLocaleTimeString() }, h("span", { class: "lvl", text: LEVEL_NAMES[l.level] || l.level }), h("span", { text: l.text }))));
   box.scrollTop = box.scrollHeight;
 }
 
@@ -538,7 +621,7 @@ function wire() {
   if (IS_DEVTOOLS) {
     chrome.devtools.network.onNavigated.addListener((url) => {
       state.url = url;
-      $("target").textContent = url;
+      setTarget(url);
       state.report = null;
       renderAll();
       setStatus("Page navigated — scan again.");
@@ -553,7 +636,10 @@ function wire() {
 
 async function init() {
   document.body.classList.toggle("devtools", IS_DEVTOOLS);
-  $("mode").textContent = IS_DEVTOOLS ? "DevTools" : "Side panel";
+  if (IS_DEVTOOLS && chrome.devtools.panels?.themeName) {
+    document.documentElement.dataset.theme = chrome.devtools.panels.themeName === "dark" ? "dark" : "light";
+  }
+  $("mode").textContent = IS_DEVTOOLS ? "in DevTools" : "";
   if (!IS_DEVTOOLS) {
     try { state.windowId = (await chrome.windows.getCurrent()).id; } catch (_) { /* ignore */ }
   }
