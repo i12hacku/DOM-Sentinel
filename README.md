@@ -64,7 +64,7 @@ The scanner is **fully local and deterministic**. AI is an optional extra: it ca
 ## Installation
 
 ```bash
-git clone https://github.com/<your-username>/dom-sentinel.git
+git clone https://github.com/i12hacku/DOM-Sentinel.git
 ```
 
 1. Open `chrome://extensions` and turn on **Developer mode**.
