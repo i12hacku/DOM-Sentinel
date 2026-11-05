@@ -1,0 +1,46 @@
+# Changelog
+
+All notable changes to DOM Sentinel are documented here.
+This project follows [Semantic Versioning](https://semver.org/) and the
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
+
+- **MAJOR** — breaking changes (removed features, changed permissions or stored-data format)
+- **MINOR** — new features that keep working the same way for existing users
+- **PATCH** — bug fixes only
+
+## [2.1.0] - 2026-11-06
+
+### Added
+- Threat spectrum bar in the header that shows the page's severity mix and works as a severity filter.
+- Light and dark themes that follow the system setting, or the DevTools theme inside DevTools.
+- Empty states that explain what each tab does before the first scan.
+- Keyboard and screen-reader support: visible focus outlines, expandable finding rows, and announced status messages.
+
+### Changed
+- Redesigned the panel with ruled finding rows, a "How to fix or verify" note on each finding, and plainer labels.
+- Findings, hidden elements and recon data are now shown as rows on one sheet instead of separate cards.
+
+## [2.0.1] - 2026-11-06
+
+### Fixed
+- The side panel header no longer shows "null" after the domain on root URLs such as `https://example.com/`.
+- AI requests now retry when Gemini is temporarily overloaded (HTTP 503/429/500).
+- AI requests now raise the token limit when a "thinking" model uses it all before answering (`MAX_TOKENS`).
+
+## [2.0.0] - 2026-11-05
+
+### Added
+- Local rule-based scanner covering security headers, cookie flags, secrets and JWTs, DOM XSS hints, forms, mixed content, Subresource Integrity, source maps, vulnerable libraries and console errors.
+- Hidden element discovery with reveal and restore on the live page.
+- Recon view, JavaScript runner with snippets, element picker and editor.
+- DevTools "Security" panel and Elements sidebar, alongside the side panel.
+- Optional opt-in active checks for well-known sensitive paths.
+- Markdown and JSON report export.
+
+### Changed
+- Gemini AI is now optional. The model is picked automatically from those your key can use.
+- Replaced the popup with a side panel, so results stay visible while you browse.
+
+[2.1.0]: https://github.com/<your-username>/dom-sentinel/compare/v2.0.1...v2.1.0
+[2.0.1]: https://github.com/<your-username>/dom-sentinel/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/<your-username>/dom-sentinel/releases/tag/v2.0.0
