@@ -1,6 +1,6 @@
 // Adds a "Security" panel to DevTools and a "Security" sidebar in the Elements panel.
 
-chrome.devtools.panels.create("Security", "", "ui/panel.html");
+chrome.devtools.panels.create("Security", "icons/icon-32.png", "ui/panel.html");
 
 // Evaluated in the inspected page for the element selected in the Elements panel ($0).
 function describeSelected(el) {

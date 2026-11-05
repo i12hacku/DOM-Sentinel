@@ -19,6 +19,7 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 - "New" flag on findings that appeared since the last scan, and **New since last scan** / **Fixed since last scan** options in the findings filter.
 - Markdown and JSON exports include the changes since the last scan and the list of fixed findings.
 - Settings: delete the scan history saved for the current site.
+- DOM Sentinel logo as the extension icon (toolbar, extensions page, DevTools tab), with `icons/make-icons.ps1` to regenerate the sizes from the source logo.
 
 ### Changed
 - The severity bar, counts and tab badge now leave out dismissed findings.
