@@ -430,3 +430,17 @@ body:not(.devtools) .devtools-only { display: none; }
 /* ---------- AI streaming ---------- */
 .ai-status:empty { display: none; }
 .btn.is-running { background: var(--sheet); color: var(--high); border-color: color-mix(in srgb, var(--high) 50%, transparent); }
+
+/* ---------- single-page apps: stale results notice ---------- */
+.stale {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 9px; padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--medium) 45%, transparent);
+  border-left: 3px solid var(--medium);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--medium) 8%, var(--sheet));
+  font-size: 12.5px;
+}
+.stale[hidden] { display: none; }
+.stale span { flex: 1; min-width: 180px; }
+.btn.small { padding: 3px 9px; font-size: 12px; }

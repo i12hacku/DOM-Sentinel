@@ -48,6 +48,14 @@ The scanner is **fully local and deterministic**. AI is an optional extra: it ca
 - Ranks them by interest: hidden forms, inputs, links, and keywords like *admin*, *debug* or *internal*.
 - **Reveal / restore** them on the live page, and flag tamperable hidden inputs (`role`, `price`, `user_id`…).
 
+### 🧭 Modern apps
+- **Shadow DOM and iframes:** scans inside open and closed shadow roots (web components) and same-origin iframes, nested to any depth. Selectors that cross these boundaries are written `host >>> inner`.
+- **Single-page apps:** notices route changes (`history.pushState`, `#/hash` routes) without a reload, marks earlier results as out of date, and can rescan automatically.
+
+### ✅ Review workflow
+- **Triage:** mark each finding *Confirmed*, *False positive* or *Accepted risk*. Reviews are saved per site and reapplied on every scan; dismissed findings drop out of the counts.
+- **Scan comparison:** every scan is compared with the previous scan of the same page, showing what's **new**, **fixed** and unchanged.
+
 ### 🧰 Developer tooling
 - **Console capture** from `document_start`: errors, unhandled rejections, failed resources and CSP violations.
 - **JavaScript runner** with ready-made snippets (network requests, forms, storage dump, live DOM-sink monitor, `postMessage` listeners…). Inside the DevTools panel it can still run code on pages whose CSP blocks `eval`.
@@ -57,8 +65,9 @@ The scanner is **fully local and deterministic**. AI is an optional extra: it ca
 
 ### 🤖 Optional AI assistant
 - Explains and prioritises findings, with attack scenarios, likely false positives, DevTools verification steps and fixes.
-- Generates read-only DevTools scripts from a plain-English task.
-- Picks a usable model automatically, falls back across several API keys, retries on overload, and handles token budgets for "thinking" models.
+- Generates read-only DevTools scripts from a plain-English task, in a fast mode that limits the model's thinking time.
+- Streams answers as they are written, with a live timer and a **Stop** button.
+- Picks a usable model automatically, falls back across models and API keys, and gives up on a stalled model after 20–25 seconds.
 - Only the **findings summary** is sent. Page HTML and cookie values are never sent.
 
 ## Installation
@@ -89,7 +98,25 @@ The repo includes an intentionally insecure test page:
 python -m http.server 8765
 ```
 
-Open `http://localhost:8765/test/vulnerable-test-page.html?q=hello` and scan it.
+Open `http://localhost:8765/test/vulnerable-test-page.html?q=hello` and scan it. It also contains a web component with a hidden admin form, a same-origin iframe, and buttons that change the route without a reload.
+
+## Development
+
+No dependencies to install, just Node.js 22 or newer.
+
+```bash
+npm run check
+```
+
+Checks that the manifest is valid, that every file it references exists, that icon sizes match, and that every JavaScript file parses.
+
+```bash
+npm test
+```
+
+Runs the unit tests for the rule engine (`lib/rules.js`) and the streaming AI client (`lib/ai.js`, against a simulated Gemini API).
+
+GitHub Actions runs both on every push and pull request, and attaches an installable `dom-sentinel-<version>.zip` to each run.
 
 ## Architecture
 
@@ -122,6 +149,10 @@ Open `http://localhost:8765/test/vulnerable-test-page.html?q=hello` and scan it.
 | `ui/` | Shared UI for the side panel and the DevTools panel |
 | `devtools/` | Registers the DevTools panel and the Elements sidebar |
 | `test/` | Insecure demo page and a UI preview harness |
+| `test/unit/` | Unit tests (`npm test`) |
+| `scripts/check-extension.mjs` | Static extension checks (`npm run check`) |
+| `icons/` | Extension icons, and `make-icons.ps1` to regenerate them from `logo.jfif` |
+| `.github/workflows/ci.yml` | CI: check, test and package on every push |
 
 ## Permissions
 
@@ -148,17 +179,23 @@ Open `http://localhost:8765/test/vulnerable-test-page.html?q=hello` and scan it.
 - Library vulnerability detection is version-based and covers a curated set of libraries.
 - Wrapping `console.*` makes DevTools show `console-hook.js` as the source line for page logs.
 - Browser-internal pages (`chrome://`, the Chrome Web Store) cannot be scanned.
+- Cross-origin iframes are skipped: browsers don't let extensions read into them from the parent page. Open the frame's URL in its own tab to scan it.
 
 ## Roadmap
 
-- [ ] Shadow DOM and same-origin iframe scanning
+- [x] Shadow DOM and same-origin iframe scanning *(2.2.0)*
+- [x] Finding reviews and scan comparison *(2.2.0)*
+- [x] Single-page app route tracking *(2.2.0)*
+- [ ] API traffic view (XHR / fetch headers and responses)
+- [ ] Open-redirect and postMessage live monitor
+- [ ] HTML report export
 - [ ] Custom rule packs (JSON)
 - [ ] SARIF export
 - [ ] Firefox (MV3) support
 
 ## Contributing
 
-Issues and pull requests are welcome. Please test against `test/vulnerable-test-page.html` and keep new rules in `lib/rules.js` as pure functions.
+Issues and pull requests are welcome. Keep new rules in `lib/rules.js` as pure functions with a test in `test/unit/rules.test.js`, run `npm run check && npm test`, and try the change against `test/vulnerable-test-page.html`.
 
 ## Disclaimer
 

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Check extension and run tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Manifest is valid, referenced files exist, icon sizes match, every JS file parses.
+      - name: Check extension
+        run: npm run check
+
+      # Unit tests for the rule engine and the streaming AI client (no network).
+      - name: Run tests
+        run: npm test
+
+      # Zip exactly what Chrome loads, so every commit has an installable build.
+      - name: Package extension
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          zip -r "dom-sentinel-$VERSION.zip" manifest.json background.js lib injected ui devtools icons -x "*.DS_Store"
+          echo "ZIP=dom-sentinel-$VERSION.zip" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP }}
+          path: ${{ env.ZIP }}

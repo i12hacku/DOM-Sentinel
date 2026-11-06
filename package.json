@@ -1,0 +1,15 @@
+{
+  "name": "dom-sentinel",
+  "version": "2.2.0",
+  "private": true,
+  "description": "Chrome DevTools extension for client-side web security analysis.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/unit/*.test.js\"",
+    "check": "node scripts/check-extension.mjs",
+    "verify": "npm run check && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

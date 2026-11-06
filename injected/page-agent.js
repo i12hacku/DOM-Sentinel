@@ -25,13 +25,71 @@
     return s.length > n ? s.slice(0, n) + "…" : s;
   };
 
-  function cssPath(el) {
-    if (!(el instanceof Element)) return "";
-    const uniqueId = (e) => e.id && document.querySelectorAll("#" + CSS.escape(e.id)).length === 1;
+  // ---------- roots: the page, shadow roots and same-origin iframes ----------
+  // Selectors that cross a shadow-root or iframe boundary are written as
+  // "host-selector >>> inner-selector" (any depth). querySelectorDeep() resolves them.
+
+  const MAX_ROOTS = 300;
+  const shadowOf = (el) => el.shadowRoot || globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null;
+  const frameDoc = (el) => {
+    if (el.localName !== "iframe" && el.localName !== "frame") return null;
+    try { return el.contentDocument && el.contentDocument.documentElement ? el.contentDocument : null; } catch (_) { return null; }
+  };
+  const docOf = (root) => (root.nodeType === 9 ? root : root.ownerDocument);
+  // getComputedStyle from the element's own window (iframes have their own).
+  const csOf = (el) => (el.ownerDocument.defaultView || window)["getComputedStyle"](el);
+
+  function collectRoots() {
+    const roots = [{ root: document, kind: "document" }];
+    const seen = new Set([document]);
+    const counts = { shadowRoots: 0, frames: 0, crossOriginFrames: 0 };
+    for (let i = 0; i < roots.length; i++) {
+      const r = roots[i].root;
+      const walker = docOf(r).createTreeWalker(r, NodeFilter.SHOW_ELEMENT);
+      let n = 0;
+      while (walker.nextNode() && n++ < 30000 && roots.length < MAX_ROOTS) {
+        const el = walker.currentNode;
+        const sr = shadowOf(el);
+        if (sr && !seen.has(sr)) { seen.add(sr); roots.push({ root: sr, kind: "shadow" }); counts.shadowRoots += 1; }
+        if (el.localName === "iframe" || el.localName === "frame") {
+          const d = frameDoc(el);
+          if (d && !seen.has(d)) { seen.add(d); roots.push({ root: d, kind: "frame" }); counts.frames += 1; }
+          else if (!d && el.getAttribute("src") && !/^(about:|javascript:)/i.test(el.getAttribute("src"))) counts.crossOriginFrames += 1;
+        }
+      }
+    }
+    state.roots = roots;
+    state.rootCounts = counts;
+    return roots;
+  }
+  const allRoots = () => state.roots || collectRoots();
+  // querySelectorAll across every root.
+  const qsa = (sel) => allRoots().flatMap(({ root }) => { try { return Array.from(root.querySelectorAll(sel)); } catch (_) { return []; } });
+
+  function querySelectorDeep(selector) {
+    const parts = String(selector).split(" >>> ");
+    let scope = document;
+    let el = null;
+    for (let i = 0; i < parts.length; i++) {
+      try { el = scope.querySelector(parts[i]); } catch (_) { return null; }
+      if (!el) return null;
+      if (i < parts.length - 1) {
+        scope = shadowOf(el) || frameDoc(el);
+        if (!scope) return null;
+      }
+    }
+    return el;
+  }
+
+  // Path within the element's own root (document, shadow root or iframe document).
+  function localPath(el) {
+    const rootNode = el.getRootNode();
+    const uniqueId = (e) => e.id && rootNode.querySelectorAll("#" + CSS.escape(e.id)).length === 1;
     if (uniqueId(el)) return "#" + CSS.escape(el.id);
+    const top = rootNode.nodeType === 9 ? rootNode.documentElement : null;
     const parts = [];
     let cur = el;
-    while (cur && cur.nodeType === 1 && cur !== document.documentElement && parts.length < 10) {
+    while (cur && cur.nodeType === 1 && cur !== top && parts.length < 10) {
       if (uniqueId(cur)) { parts.unshift("#" + CSS.escape(cur.id)); break; }
       let part = cur.localName;
       const parent = cur.parentElement;
@@ -45,6 +103,35 @@
     return parts.join(" > ");
   }
 
+  function cssPath(el) {
+    if (!el || el.nodeType !== 1) return "";
+    const local = localPath(el);
+    const rootNode = el.getRootNode();
+    if (rootNode.nodeType === 11 && rootNode.host) return cssPath(rootNode.host) + " >>> " + local;
+    if (rootNode.nodeType === 9 && rootNode !== document) {
+      const fe = rootNode.defaultView?.frameElement;
+      if (fe) return cssPath(fe) + " >>> " + local;
+    }
+    return local;
+  }
+
+  // Bounding box in the top window's viewport (adds the offsets of any iframes).
+  function viewportRect(el) {
+    const r = el.getBoundingClientRect();
+    let x = r.left, y = r.top;
+    let win = el.ownerDocument.defaultView;
+    while (win && win !== window) {
+      let fe = null;
+      try { fe = win.frameElement; } catch (_) { fe = null; }
+      if (!fe) break;
+      const fr = fe.getBoundingClientRect();
+      x += fr.left + fe.clientLeft;
+      y += fr.top + fe.clientTop;
+      win = fe.ownerDocument.defaultView;
+    }
+    return { left: x, top: y, width: r.width, height: r.height };
+  }
+
   function hiddenReason(el, cs) {
     if (el.hidden) return "hidden attribute";
     if (cs.display === "none") return "display:none";
@@ -53,8 +140,10 @@
     const r = el.getBoundingClientRect();
     const hasContent = el.childElementCount > 0 || (el.textContent || "").trim().length > 0;
     if (hasContent && (cs.position === "absolute" || cs.position === "fixed")) {
-      const left = r.left + scrollX, top = r.top + scrollY;
-      if (r.right + scrollX < -20 || r.bottom + scrollY < -20 || left > document.documentElement.scrollWidth + 500 || top > document.documentElement.scrollHeight + 2000) {
+      const win = el.ownerDocument.defaultView || window;
+      const docEl = el.ownerDocument.documentElement;
+      const left = r.left + win.scrollX, top = r.top + win.scrollY;
+      if (r.right + win.scrollX < -20 || r.bottom + win.scrollY < -20 || left > docEl.scrollWidth + 500 || top > docEl.scrollHeight + 2000) {
         return "positioned off-screen";
       }
     }
@@ -80,14 +169,12 @@
     const items = [];
     let visited = 0;
     let total = 0;
-    if (!document.body) return items;
-
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
+    const filter = {
       acceptNode(node) {
         if (++visited > MAX_WALK) return NodeFilter.FILTER_REJECT;
         if (SKIP_TAGS.has(node.tagName) || node.closest("svg")) return NodeFilter.FILTER_REJECT;
         if (node.matches("input[type=hidden]")) return NodeFilter.FILTER_REJECT;
-        const cs = getComputedStyle(node);
+        const cs = csOf(node);
         const reason = hiddenReason(node, cs);
         if (!reason) return NodeFilter.FILTER_SKIP; // keep walking children
         total += 1;
@@ -134,13 +221,18 @@
         }
         return NodeFilter.FILTER_REJECT; // children are hidden too; don't double-report
       }
-    });
-    while (walker.nextNode()) { /* acceptNode does the work */ }
+    };
+    for (const { root } of allRoots()) {
+      const start = root.nodeType === 9 ? root.body : root;
+      if (!start) continue;
+      const walker = docOf(root).createTreeWalker(start, NodeFilter.SHOW_ELEMENT, filter);
+      while (walker.nextNode()) { /* acceptNode does the work */ }
+    }
     return { items, total };
   }
 
   function scanHiddenInputs(findings, sources) {
-    const inputs = Array.from(document.querySelectorAll("input[type=hidden]"));
+    const inputs = Array.from(qsa("input[type=hidden]"));
     const plain = [];
     for (const input of inputs) {
       const name = input.name || input.id || "(unnamed)";
@@ -173,7 +265,7 @@
   }
 
   function scanDisabled(findings) {
-    const els = Array.from(document.querySelectorAll("button[disabled], input[disabled], select[disabled], textarea[disabled], [readonly], [aria-disabled=true]")).slice(0, 60);
+    const els = Array.from(qsa("button[disabled], input[disabled], select[disabled], textarea[disabled], [readonly], [aria-disabled=true]")).slice(0, 60);
     if (!els.length) return;
     const lines = els.map((e) => `${cssPath(e)}  ${clip((e.textContent || e.value || e.name || "").trim(), 50)}`);
     findings.push({
@@ -187,10 +279,18 @@
   }
 
   function scanComments(findings, sources) {
-    const walker = document.createTreeWalker(document, NodeFilter.SHOW_COMMENT);
     const hits = [];
     let n = 0;
-    while (walker.nextNode() && n < 3000) {
+    const walkers = allRoots().map(({ root }) => docOf(root).createTreeWalker(root, NodeFilter.SHOW_COMMENT));
+    let walker = null;
+    const nextComment = () => {
+      while (walkers.length) {
+        if (walkers[0].nextNode()) { walker = walkers[0]; return true; }
+        walkers.shift();
+      }
+      return false;
+    };
+    while (nextComment() && n < 3000) {
       n += 1;
       const text = walker.currentNode.nodeValue.trim();
       if (!text || /^\[if |^\[endif|^ko |^\/ko|^\$|^\/\$|^react-|^-->$/.test(text)) continue;
@@ -213,7 +313,7 @@
 
   function scanForms(findings) {
     const isHttps = location.protocol === "https:";
-    for (const form of Array.from(document.forms).slice(0, 80)) {
+    for (const form of qsa("form").slice(0, 80)) {
       const sel = cssPath(form);
       const method = (form.getAttribute("method") || "GET").toUpperCase();
       const actionAttr = form.getAttribute("action");
@@ -236,14 +336,14 @@
         findings.push({ category: "Forms", severity: hasPassword ? "medium" : "info", title: `Form posts to another origin (${action.host})`, description: "Data entered in this form is sent to a third-party origin.", evidence: snippet, selector: sel, recommendation: "Confirm the destination is expected and trusted." });
       }
     }
-    const loosePw = Array.from(document.querySelectorAll("input[type=password]")).filter((i) => !i.form);
+    const loosePw = Array.from(qsa("input[type=password]")).filter((i) => !i.form);
     if (loosePw.length && location.protocol !== "https:") {
       findings.push({ category: "Forms", severity: "high", title: "Password field on a non-HTTPS page", description: "Credentials are typed into a page that is not protected by TLS.", evidence: clip(loosePw[0].outerHTML, 300), selector: cssPath(loosePw[0]), recommendation: "Serve the page over HTTPS." });
     }
   }
 
   function scanLinksAndHandlers(findings) {
-    const all = Array.from(document.querySelectorAll("*")).slice(0, 15000);
+    const all = Array.from(qsa("*")).slice(0, 15000);
     const handlerSamples = [];
     let handlerCount = 0;
     const jsUrls = [];
@@ -267,7 +367,7 @@
       findings.push({ category: "DOM XSS hints", severity: "low", title: `${jsUrls.length} javascript: URL(s)`, description: "javascript: URLs execute code on navigation and are blocked by strict CSP. If any part is user-controlled it is an XSS vector.", evidence: jsUrls.slice(0, 20).join("\n"), recommendation: "Replace with event listeners." });
     }
 
-    const blankLinks = Array.from(document.querySelectorAll("a[target=_blank][href]")).filter((a) => {
+    const blankLinks = Array.from(qsa("a[target=_blank][href]")).filter((a) => {
       try { return new URL(a.href).origin !== location.origin && !/noopener|noreferrer/i.test(a.rel); } catch (_) { return false; }
     });
     if (blankLinks.length) {
@@ -278,21 +378,21 @@
   function scanResources(findings) {
     const isHttps = location.protocol === "https:";
     if (isHttps) {
-      const mixed = Array.from(document.querySelectorAll("script[src^='http:'], iframe[src^='http:'], link[rel~=stylesheet][href^='http:'], img[src^='http:'], video[src^='http:'], audio[src^='http:'], source[src^='http:'], object[data^='http:'], embed[src^='http:'], form[action^='http:']"));
+      const mixed = Array.from(qsa("script[src^='http:'], iframe[src^='http:'], link[rel~=stylesheet][href^='http:'], img[src^='http:'], video[src^='http:'], audio[src^='http:'], source[src^='http:'], object[data^='http:'], embed[src^='http:'], form[action^='http:']"));
       if (mixed.length) {
         const active = mixed.filter((e) => /^(script|iframe|link|object|embed|form)$/.test(e.localName));
         findings.push({ category: "Transport", severity: active.length ? "medium" : "low", title: `${mixed.length} mixed-content reference(s) on an HTTPS page`, description: active.length ? "Active content (scripts/frames/styles/forms) loaded over HTTP can be modified in transit." : "Passive content loaded over HTTP leaks requests and can be swapped.", evidence: mixed.slice(0, 20).map((e) => clip(e.outerHTML, 160)).join("\n"), selector: cssPath(mixed[0]), recommendation: "Load all resources over HTTPS; consider CSP upgrade-insecure-requests." });
       }
     }
 
-    const noSri = Array.from(document.querySelectorAll("script[src], link[rel~=stylesheet][href]")).filter((e) => {
+    const noSri = Array.from(qsa("script[src], link[rel~=stylesheet][href]")).filter((e) => {
       try { return new URL(e.src || e.href).origin !== location.origin && !e.integrity; } catch (_) { return false; }
     });
     if (noSri.length) {
       findings.push({ category: "Third-party code", severity: "low", title: `${noSri.length} third-party script/style(s) without Subresource Integrity`, description: "If the third-party host is compromised, it can run arbitrary code on this page.", evidence: noSri.slice(0, 25).map((e) => e.src || e.href).join("\n"), recommendation: "Add integrity=\"sha384-…\" crossorigin=\"anonymous\" for static CDN assets, or self-host them." });
     }
 
-    const frames = Array.from(document.querySelectorAll("iframe")).filter((f) => {
+    const frames = Array.from(qsa("iframe")).filter((f) => {
       try { return f.src && new URL(f.src).origin !== location.origin && !f.hasAttribute("sandbox"); } catch (_) { return false; }
     });
     if (frames.length) {
@@ -355,15 +455,15 @@
 
   function collectSources(sources) {
     let i = 0;
-    for (const s of document.scripts) {
+    for (const s of qsa("script")) {
       i += 1;
       if (!s.src && s.textContent.trim()) sources.push({ origin: `inline <script> #${i}${s.type ? " (" + s.type + ")" : ""}`, text: s.textContent, inline: true });
     }
-    for (const m of document.querySelectorAll("meta[content]")) {
+    for (const m of qsa("meta[content]")) {
       const c = m.getAttribute("content");
       if (c.length > 15) sources.push({ origin: `<meta ${m.getAttribute("name") || m.getAttribute("property") || m.getAttribute("http-equiv") || ""}>`, text: c });
     }
-    for (const el of document.querySelectorAll("*")) {
+    for (const el of qsa("*")) {
       for (const a of el.attributes) {
         if (a.name.startsWith("data-") && a.value.length > 20) sources.push({ origin: `${a.name} on ${cssPath(el)}`, text: a.value.slice(0, 10000) });
       }
@@ -386,6 +486,7 @@
     const findings = [];
     const sources = [];
     const started = performance.now();
+    collectRoots();
     const hidden = scanHidden(findings);
     scanHiddenInputs(findings, sources);
     scanDisabled(findings);
@@ -405,15 +506,16 @@
       hidden: hidden.items || [],
       hiddenTotal: hidden.total || 0,
       storage,
-      scriptUrls: Array.from(document.scripts).filter((s) => s.src).map((s) => s.src).slice(0, 200),
+      scriptUrls: qsa("script").filter((s) => s.src).map((s) => s.src).slice(0, 200),
       jsCookieNames: document.cookie ? document.cookie.split(";").map((c) => c.split("=")[0].trim()).filter(Boolean) : [],
       cspMeta: cspMeta ? cspMeta.getAttribute("content") : null,
       sources: collectSources(sources),
+      roots: state.rootCounts,
       stats: {
-        elements: document.getElementsByTagName("*").length,
-        forms: document.forms.length,
-        scripts: document.scripts.length,
-        iframes: document.querySelectorAll("iframe").length,
+        elements: qsa("*").length,
+        forms: qsa("form").length,
+        scripts: qsa("script").length,
+        iframes: qsa("iframe").length,
         ms: Math.round(performance.now() - started)
       }
     };
@@ -441,7 +543,7 @@
   }
 
   function drawBox(root, el, label, color = "#ff2d95") {
-    const r = el.getBoundingClientRect();
+    const r = viewportRect(el);
     const box = document.createElement("div");
     box.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${Math.max(r.width, 4)}px;height:${Math.max(r.height, 4)}px;border:2px solid ${color};background:${color}22;box-sizing:border-box;transition:opacity .3s;`;
     const tag = document.createElement("div");
@@ -455,13 +557,13 @@
   function resolve(selector, ref) {
     if (typeof ref === "number" && state.hiddenEls[ref]?.isConnected) return state.hiddenEls[ref];
     if (!selector) return null;
-    try { return document.querySelector(selector); } catch (_) { return null; }
+    return querySelectorDeep(selector);
   }
 
   function highlight(selector, ref) {
     const el = resolve(selector, ref);
     if (!el) return { ok: false, error: "Element not found (the page may have changed — rescan)." };
-    const reason = hiddenReason(el, getComputedStyle(el));
+    const reason = hiddenReason(el, csOf(el));
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     setTimeout(() => {
       const box = drawBox(overlayHost(), el, `${cssPath(el)}${reason ? "  [hidden: " + reason + "]" : ""}`);
@@ -474,7 +576,7 @@
     if (state.revealed.has(el)) return;
     state.revealed.set(el, { style: el.getAttribute("style"), hidden: el.hasAttribute("hidden") });
     el.removeAttribute("hidden");
-    const cs = getComputedStyle(el);
+    const cs = csOf(el);
     if (cs.display === "none") el.style.setProperty("display", el.localName === "span" || el.localName === "a" ? "inline-block" : "block", "important");
     el.style.setProperty("visibility", "visible", "important");
     el.style.setProperty("opacity", "1", "important");
@@ -516,7 +618,7 @@
   function readElement(selector) {
     const el = resolve(selector);
     if (!el) return { ok: false, error: `No element matches: ${selector}` };
-    const cs = getComputedStyle(el);
+    const cs = csOf(el);
     const r = el.getBoundingClientRect();
     return {
       ok: true,
@@ -568,7 +670,8 @@
     let box = null;
     let current = null;
     const move = (e) => {
-      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const path = e.composedPath ? e.composedPath() : [];
+      const el = path.find((n) => n.nodeType === 1) || document.elementFromPoint(e.clientX, e.clientY);
       if (!el || el === current || el.id === "__dta_overlay_host") return;
       current = el;
       box?.remove();
@@ -577,7 +680,7 @@
     const click = (e) => {
       e.preventDefault();
       e.stopImmediatePropagation();
-      const sel = cssPath(current || e.target);
+      const sel = cssPath(current || (e.composedPath ? e.composedPath()[0] : e.target));
       cleanup();
       chrome.runtime.sendMessage({ type: "DTA_PICKED", selector: sel }).catch(() => {});
     };

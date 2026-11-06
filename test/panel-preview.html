@@ -39,8 +39,10 @@
     const noop = () => {};
     window.chrome = {
       runtime: {
-        sendMessage: async (m) => m.type === "GET_REPORT" ? { ok: true, data: sample } : m.type === "READ_CONSOLE" ? { ok: true, data: { hook: true, logs: [{ ts: Date.now(), level: "error", text: "TypeError: x is undefined" }, { ts: Date.now(), level: "csp-violation", text: "'script-src' blocked https://evil.test/x.js" }] } } : { ok: true, data: {} },
-        onMessage: { addListener: noop },
+        // SCAN returns the sample report for the current (possibly changed) address.
+        sendMessage: async (m) => m.type === "SCAN" ? { ok: true, data: (window.__lastReport = { ...sample, url: window.__tabUrl || sample.url, scannedAt: new Date().toISOString() }) } : m.type === "GET_REPORT" ? { ok: true, data: window.__lastReport || sample } : m.type === "READ_CONSOLE" ? { ok: true, data: { hook: true, logs: [{ ts: Date.now(), level: "error", text: "TypeError: x is undefined" }, { ts: Date.now(), level: "csp-violation", text: "'script-src' blocked https://evil.test/x.js" }] } } : { ok: true, data: {} },
+        // Call window.__emit({ type: "DTA_URL", tabId: 1, url }) to simulate a route change.
+        onMessage: { addListener: (fn) => { (window.__listeners ||= []).push(fn); window.__emit = (msg) => window.__listeners.forEach((l) => l(msg, { tab: { id: 1 } })); } },
         // Fake streaming AI port: status, then the answer in a few chunks.
         connect: () => {
           const listeners = [], closers = [];
@@ -70,7 +72,7 @@
         },
         session: { remove: async () => {} }
       },
-      tabs: { query: async () => [{ id: 1, url: sample.url }], onActivated: { addListener: noop }, onUpdated: { addListener: noop } },
+      tabs: { query: async () => [{ id: 1, url: window.__tabUrl || sample.url }], onActivated: { addListener: noop }, onUpdated: { addListener: noop } },
       windows: { getCurrent: async () => ({ id: 1 }) }
     };
   </script>

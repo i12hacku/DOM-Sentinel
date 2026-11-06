@@ -86,7 +86,15 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-const sameDoc = (a, b) => String(a || "").split("#")[0] === String(b || "").split("#")[0];
+// A "route" is origin + path + query, plus the hash when it is a client-side route (#/… or #!…).
+function routeKey(url) {
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname + u.search + (/^#[!/]/.test(u.hash) ? u.hash : "");
+  } catch (_) { return String(url || ""); }
+}
+const sameRoute = (a, b) => routeKey(a) === routeKey(b);
+const routeLabel = (url) => { try { const u = new URL(url); return (u.pathname + u.search + (/^#[!/]/.test(u.hash) ? u.hash : "")) || "/"; } catch (_) { return url; } };
 const fmtBytes = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : n > 1e3 ? Math.round(n / 1e3) + " KB" : n + " B");
 
 // ---------- target tab ----------
@@ -98,7 +106,7 @@ function setTarget(url) {
   try {
     const u = new URL(url);
     host = u.host || u.protocol;
-    path = u.pathname + u.search;
+    path = u.pathname + u.search + (/^#[!/]/.test(u.hash) ? u.hash : "");
   } catch (_) { host = url || "No tab"; }
   const parts = [h("span", { class: "host", text: host })];
   if (path && path !== "/") parts.push(h("span", { class: "path", text: path }));
@@ -124,7 +132,7 @@ async function loadReport() {
   state.report = null;
   try {
     const r = await send("GET_REPORT");
-    if (r && sameDoc(r.url, state.url)) state.report = r;
+    if (r && (sameRoute(r.url, state.url) || originOf(r.url) === originOf(state.url))) state.report = r;
   } catch (_) { /* ignore */ }
   state.openRows.clear();
   await loadTriage();
@@ -153,6 +161,7 @@ async function scan() {
 }
 
 function renderAll(opts = {}) {
+  renderStale();
   renderSpectrum(opts.fresh);
   renderChanges();
   renderFindings();
@@ -273,7 +282,7 @@ const MAX_SNAPSHOT_ITEMS = 500;
 function historyKey(url) {
   try {
     const u = new URL(url);
-    return u.origin && u.origin !== "null" ? "history:" + u.origin + u.pathname : null;
+    return u.origin && u.origin !== "null" ? "history:" + u.origin + u.pathname + (/^#[!/]/.test(u.hash) ? u.hash : "") : null;
   } catch (_) { return null; }
 }
 
@@ -519,7 +528,7 @@ async function highlight(selector, ref) {
 
 async function showInElements(selector) {
   try {
-    const found = await devtoolsEval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (e) inspect(e); return !!e; })()`);
+    const found = await devtoolsEval(`(() => { const e = (${DEEP_QS})(${JSON.stringify(selector)}); if (e) inspect(e); return !!e; })()`);
     setStatus(found ? "Selected in the Elements panel." : "Element not found. The page may have changed; scan again.", !found);
   } catch (e) { setStatus(e.message, true); }
 }
@@ -595,6 +604,7 @@ function renderRecon() {
     ["Scanned", new Date(r.scannedAt).toLocaleString() + ` (${(r.durationMs / 1000).toFixed(1)}s)`],
     ["Elements", String(r.stats?.elements)],
     ["Forms, scripts, iframes", `${r.stats?.forms}, ${r.stats?.scripts}, ${r.stats?.iframes}`],
+    ["Also scanned", r.roots ? `${r.roots.shadowRoots} shadow root${r.roots.shadowRoots === 1 ? "" : "s"}, ${r.roots.frames} same-origin frame${r.roots.frames === 1 ? "" : "s"}${r.roots.crossOriginFrames ? `. ${r.roots.crossOriginFrames} cross-origin frame${r.roots.crossOriginFrames === 1 ? " was" : "s were"} skipped (browsers block access).` : ""}` : "Main document only"],
     ["Console capture", r.consoleHook ? "On" : "Off. Reload the page to turn it on."],
     ["Active checks", r.activeChecks ? "Included" : "Not run"]
   ])));
@@ -712,7 +722,10 @@ async function runCode() {
 
 // ---------- inspector ----------
 
-const PATH_FN = `function(el){if(!el)return"";const p=[];while(el&&el.nodeType===1&&el!==document.documentElement&&p.length<10){if(el.id&&document.querySelectorAll("#"+CSS.escape(el.id)).length===1){p.unshift("#"+CSS.escape(el.id));break}let s=el.localName;const par=el.parentElement;if(par){const sib=[...par.children].filter(c=>c.localName===el.localName);if(sib.length>1)s+=":nth-of-type("+(sib.indexOf(el)+1)+")"}p.unshift(s);el=par}return p.join(" > ")}`;
+// Evaluated in the inspected page via DevTools. Paths cross shadow roots and
+// same-origin iframes with " >>> ", matching injected/page-agent.js.
+const PATH_FN = `function p(el){if(!el||el.nodeType!==1)return"";const root=el.getRootNode();const uniq=e=>e.id&&root.querySelectorAll("#"+CSS.escape(e.id)).length===1;const top=root.nodeType===9?root.documentElement:null;const parts=[];let cur=el;while(cur&&cur.nodeType===1&&cur!==top&&parts.length<10){if(uniq(cur)){parts.unshift("#"+CSS.escape(cur.id));break}let s=cur.localName;const par=cur.parentElement;if(par){const sib=[...par.children].filter(c=>c.localName===cur.localName);if(sib.length>1)s+=":nth-of-type("+(sib.indexOf(cur)+1)+")"}parts.unshift(s);cur=par}const local=parts.join(" > ");if(root.nodeType===11&&root.host)return p(root.host)+" >>> "+local;if(root.nodeType===9&&root!==document&&root.defaultView&&root.defaultView.frameElement)return p(root.defaultView.frameElement)+" >>> "+local;return local}`;
+const DEEP_QS = `function(sel){const parts=String(sel).split(" >>> ");let scope=document,el=null;for(let i=0;i<parts.length;i++){el=scope.querySelector(parts[i]);if(!el)return null;if(i<parts.length-1){scope=el.shadowRoot||(/^i?frame$/.test(el.localName)?el.contentDocument:null);if(!scope)return null}}return el}`;
 
 async function readElement() {
   const selector = $("selector").value.trim();
@@ -721,7 +734,7 @@ async function readElement() {
     const r = await send("READ_ELEMENT", { selector });
     if (IS_DEVTOOLS) {
       try {
-        r.eventListeners = await devtoolsEval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); return e ? Object.fromEntries(Object.entries(getEventListeners(e)).map(([k, v]) => [k, v.length])) : null; })()`);
+        r.eventListeners = await devtoolsEval(`(() => { const e = (${DEEP_QS})(${JSON.stringify(selector)}); return e ? Object.fromEntries(Object.entries(getEventListeners(e)).map(([k, v]) => [k, v.length])) : null; })()`);
       } catch (_) { /* ignore */ }
     }
     $("elementOut").textContent = JSON.stringify(r, null, 2);
@@ -814,10 +827,54 @@ function startAi(kind) {
   port.postMessage({ kind, tabId: state.tabId, task, excludeIds });
 }
 
+// ---------- single-page apps: route changes ----------
+
+async function onUrlChange(url) {
+  if (!url || url === state.url) return;
+  const previousOrigin = originOf(state.report?.url || state.url);
+  state.url = url;
+  setTarget(url);
+  if (!state.report || originOf(url) !== previousOrigin) {
+    await loadReport(); // different site (or nothing scanned yet): start fresh
+    return;
+  }
+  renderStale();
+  scheduleRescan();
+}
+
+function isStale() {
+  return Boolean(state.report && state.url && !sameRoute(state.report.url, state.url));
+}
+
+function renderStale() {
+  const box = $("stale");
+  if (!isStale()) { box.hidden = true; return; }
+  box.hidden = false;
+  $("staleText").textContent = state.autoRescan
+    ? `This page moved to ${routeLabel(state.url)}. Rescanning shortly…`
+    : `These results are for ${routeLabel(state.report.url)}. This page is now at ${routeLabel(state.url)}.`;
+  $("staleScan").hidden = state.autoRescan;
+}
+
+// Auto-rescan only on tabs the user has already scanned, and only after the
+// route has been stable for a moment (single-page apps render after navigating).
+function scheduleRescan() {
+  clearTimeout(state.rescanTimer);
+  if (!state.autoRescan || !isStale()) return;
+  renderStale();
+  state.rescanTimer = setTimeout(async () => {
+    if (!isStale() || document.body.classList.contains("scanning")) return;
+    setStatus(`Route changed to ${routeLabel(state.url)}. Rescanning…`);
+    try { await scan(); } catch (e) { setStatus(e.message, true); }
+  }, 1500);
+}
+
 // ---------- settings ----------
 
 async function loadSettings() {
-  const s = await chrome.storage.local.get(["aiKeys", "geminiApiKeys", "aiModel", "activeChecks"]);
+  const s = await chrome.storage.local.get(["aiKeys", "geminiApiKeys", "aiModel", "activeChecks", "autoRescan"]);
+  state.autoRescan = Boolean(s.autoRescan);
+  $("autoRescan").checked = state.autoRescan;
   $("aiKeys").value = (s.aiKeys || s.geminiApiKeys || []).join("\n");
   $("aiModel").value = s.aiModel || "auto";
   $("activeToggle").checked = Boolean(s.activeChecks);
@@ -964,20 +1021,22 @@ function wire() {
   });
 
   // Follow tab changes / navigations.
+  // The background worker reports every address change, including single-page-app
+  // route changes (history.pushState, #/hash routes) that never reload the page.
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === "DTA_URL" && msg.tabId === state.tabId) onUrlChange(msg.url);
+  });
   if (IS_DEVTOOLS) {
-    chrome.devtools.network.onNavigated.addListener((url) => {
-      state.url = url;
-      setTarget(url);
-      state.report = null;
-      renderAll();
-      setStatus("Page navigated — scan again.");
-    });
+    chrome.devtools.network.onNavigated.addListener((url) => onUrlChange(url));
   } else {
     chrome.tabs.onActivated.addListener(({ windowId }) => { if (windowId === state.windowId) resolveTarget(); });
-    chrome.tabs.onUpdated.addListener((tabId, info) => {
-      if (tabId === state.tabId && (info.url || info.status === "complete")) resolveTarget();
-    });
   }
+  $("autoRescan").addEventListener("change", (e) => {
+    state.autoRescan = e.target.checked;
+    chrome.storage.local.set({ autoRescan: state.autoRescan });
+    if (state.autoRescan) scheduleRescan();
+  });
+  $("staleScan").addEventListener("click", () => busy($("scanBtn"), scan));
 }
 
 async function init() {

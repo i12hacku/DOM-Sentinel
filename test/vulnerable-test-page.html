@@ -32,6 +32,30 @@
   <img src="x.png" onerror="this.remove()">
 
   <div id="out"></div>
+
+  <!-- Shadow DOM: a web component hiding an admin form inside its shadow root -->
+  <account-widget id="widget"></account-widget>
+
+  <!-- Same-origin iframe with its own hidden field and comment -->
+  <iframe id="billing" title="Billing" style="width:320px;height:80px;border:1px solid #ccc"
+    srcdoc="<!-- internal: billing service at /internal/billing/v2 --><form method='POST' action='/pay'><input type='hidden' name='amount' value='10.00'><button>Pay</button></form>"></iframe>
+
+  <!-- Single-page-app navigation without a reload -->
+  <p>
+    <button type="button" onclick="history.pushState({}, '', '/test/vulnerable-test-page.html/settings?q=hello')">Go to /settings (pushState)</button>
+    <a href="#/profile">Go to #/profile (hash route)</a>
+  </p>
+
+  <script>
+    customElements.define("account-widget", class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({ mode: "open" }).innerHTML =
+          "<p>Account</p><div class='admin-tools' style='display:none'><h3>Admin</h3>" +
+          "<form method='POST' action='/admin/impersonate'><input name='user'><button>Impersonate user</button></form></div>";
+      }
+    });
+  </script>
   <script>
     var config = { apiKey: "AKIA" + "ZZZZZZZZZZZZZZZZ", debug: true };
     var stripe_secret = "sk_live_" + "abcdefghijklmnopqrstuvwx";

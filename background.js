@@ -29,6 +29,13 @@ chrome.webRequest.onHeadersReceived.addListener(
   ["responseHeaders", "extraHeaders"]
 );
 
+// Tell open panels about address changes, including single-page-app route changes
+// (history.pushState / hash routes) that don't reload the page.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (!info.url) return;
+  chrome.runtime.sendMessage({ type: "DTA_URL", tabId, url: info.url }).catch(() => { /* no panel open */ });
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.session.remove([`hdr:${tabId}`, `report:${tabId}`]).catch(() => {});
 });
@@ -234,7 +241,11 @@ async function fetchText(url, { timeout = 8000, maxBytes = MAX_SCRIPT_BYTES, wan
 
 async function scanTab(tabId, options) {
   const t0 = Date.now();
-  const tab = await chrome.tabs.get(tabId);
+  let tab = await chrome.tabs.get(tabId);
+  for (let i = 0; i < 40 && tab.status === "loading"; i++) { // wait up to 10s for a reload to finish
+    await new Promise((r) => setTimeout(r, 250));
+    tab = await chrome.tabs.get(tabId);
+  }
   if (!/^https?:|^file:/.test(tab.url || "")) throw new Error("This page cannot be scanned (browser-internal page). Open a normal http(s) site.");
 
   const page = await agent(tabId, "collect", []);
@@ -328,7 +339,8 @@ async function scanTab(tabId, options) {
     scripts,
     endpoints,
     consoleHook: main.hook,
-    stats: page.stats
+    stats: page.stats,
+    roots: page.roots || null
   };
   await chrome.storage.session.set({ [`report:${tabId}`]: report }).catch(() => {});
   return report;

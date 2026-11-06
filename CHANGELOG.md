@@ -10,6 +10,8 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-07
+
 ### Added
 - Review findings as **Confirmed**, **False positive** or **Accepted risk**. Reviews are saved per site and reapplied automatically on every scan.
 - Review filter (Hide dismissed, Not reviewed, Confirmed, False positives, Accepted risks, All findings) and a "reviewed" progress count.
@@ -20,6 +22,11 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 - Markdown and JSON exports include the changes since the last scan and the list of fixed findings.
 - Settings: delete the scan history saved for the current site.
 - DOM Sentinel logo as the extension icon (toolbar, extensions page, DevTools tab), with `icons/make-icons.ps1` to regenerate the sizes from the source logo.
+- Single-page app support: route changes (`history.pushState`, `#/hash` routes) are detected without a reload. Earlier results stay visible, marked as out of date, with a **Scan this page** button.
+- Optional setting to rescan automatically when the page address changes on a tab you've already scanned.
+- Scans now cover open and closed shadow DOM and same-origin iframes (nested to any depth). Selectors that cross these boundaries use `host >>> inner`, and highlight, reveal, the inspector and **Show in Elements** all follow them.
+- The Recon tab shows how many shadow roots and frames were scanned, and how many cross-origin frames were skipped.
+- Unit tests for the rule engine and the streaming AI client (`npm test`), an extension check (`npm run check`), and GitHub Actions CI that also builds an installable zip.
 
 ### Changed
 - AI answers now stream into the panel as they are written, with a live timer and a **Stop** button.
@@ -28,6 +35,12 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 - The severity bar, counts and tab badge now leave out dismissed findings.
 - Markdown export lists each finding's review and moves dismissed findings to their own section. JSON export adds a `review` field to each finding.
 - "Explain and prioritise findings" no longer sends dismissed findings to the AI.
+- Scan history is kept per route, so `/settings` and `#/billing` are each compared with their own earlier scans. Reviews still apply across the whole site.
+- Scanning waits for a page that is still loading to finish first.
+
+### Fixed
+- A secret's context snippet could show a *different* secret found nearby in full. Every detected secret is now masked in all evidence and exports.
+- JWTs with an issue time of `0` skipped the long-lifetime check.
 
 ## [2.1.0] - 2026-11-06
 
@@ -62,6 +75,8 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 - Gemini AI is now optional. The model is picked automatically from those your key can use.
 - Replaced the popup with a side panel, so results stay visible while you browse.
 
-[2.1.0]: https://github.com/<your-username>/dom-sentinel/compare/v2.0.1...v2.1.0
-[2.0.1]: https://github.com/<your-username>/dom-sentinel/compare/v2.0.0...v2.0.1
-[2.0.0]: https://github.com/<your-username>/dom-sentinel/releases/tag/v2.0.0
+[Unreleased]: https://github.com/i12hacku/DOM-Sentinel/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/i12hacku/DOM-Sentinel/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/i12hacku/DOM-Sentinel/compare/v2.0.1...v2.1.0
+[2.0.1]: https://github.com/i12hacku/DOM-Sentinel/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/i12hacku/DOM-Sentinel/releases/tag/v2.0.0

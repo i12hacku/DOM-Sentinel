@@ -15,6 +15,10 @@
     </div>
 
     <p id="target" class="target"><span class="host">No tab</span></p>
+    <div id="stale" class="stale" role="status" hidden>
+      <span id="staleText"></span>
+      <button id="staleScan" class="btn primary small">Scan this page</button>
+    </div>
 
     <div id="spectrum" class="spectrum" role="img" aria-label="Not scanned yet"></div>
     <div id="summary" class="legend" role="group" aria-label="Filter by severity"></div>
@@ -163,6 +167,9 @@
         <button id="testAi" class="btn">Test AI</button>
       </div>
       <p id="settingsStatus" class="note"></p>
+      <h2 class="section-title">Single-page apps</h2>
+      <p class="lede">Apps built with React, Vue, Angular and similar frameworks change pages without reloading. DOM Sentinel notices the new address and marks the previous results as out of date.</p>
+      <label class="check"><input type="checkbox" id="autoRescan"> Rescan automatically when the page address changes on a tab I've already scanned</label>
       <h2 class="section-title">Reviews</h2>
       <p class="lede">Reviews you give findings (confirmed, false positive, accepted risk) are saved per site in this browser and reapplied on every scan.</p>
       <div class="toolbar"><button id="clearTriage" class="btn">Delete reviews for this site</button></div>
