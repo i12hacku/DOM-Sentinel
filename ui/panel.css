@@ -426,3 +426,7 @@ body:not(.devtools) .devtools-only { display: none; }
 .finding.fixed-item::before { background: var(--ok); }
 .finding.fixed-item .title-text { color: var(--ink-2); }
 .fixed-meta { margin: -4px 0 0; padding: 0 12px 8px 14px; font-size: 12px; color: var(--ink-2); }
+
+/* ---------- AI streaming ---------- */
+.ai-status:empty { display: none; }
+.btn.is-running { background: var(--sheet); color: var(--high); border-color: color-mix(in srgb, var(--high) 50%, transparent); }

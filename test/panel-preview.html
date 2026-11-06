@@ -40,7 +40,26 @@
     window.chrome = {
       runtime: {
         sendMessage: async (m) => m.type === "GET_REPORT" ? { ok: true, data: sample } : m.type === "READ_CONSOLE" ? { ok: true, data: { hook: true, logs: [{ ts: Date.now(), level: "error", text: "TypeError: x is undefined" }, { ts: Date.now(), level: "csp-violation", text: "'script-src' blocked https://evil.test/x.js" }] } } : { ok: true, data: {} },
-        onMessage: { addListener: noop }
+        onMessage: { addListener: noop },
+        // Fake streaming AI port: status, then the answer in a few chunks.
+        connect: () => {
+          const listeners = [], closers = [];
+          let open = true;
+          const emit = (m, ms) => setTimeout(() => open && listeners.forEach((fn) => fn(m)), ms);
+          return {
+            onMessage: { addListener: (fn) => listeners.push(fn) },
+            onDisconnect: { addListener: (fn) => closers.push(fn) },
+            disconnect: () => { open = false; },
+            postMessage: (req) => {
+              const parts = req.kind === "script"
+                ? ["(async () => {\n", "  const forms = [...document.forms];\n", "  console.table(forms.map(f => ({ action: f.action, method: f.method })));\n", "  return { forms: forms.length };\n", "})()"]
+                : ["## Top risks\n", "- AWS key exposed in window.config…\n", "- Password form over HTTP…\n"];
+              emit({ type: "status", text: "Asking gemini-preview-flash" }, 50);
+              parts.forEach((t, i) => emit({ type: "text", text: t }, 700 + i * 350));
+              emit({ type: "done", model: "gemini-preview-flash", text: parts.join("") }, 700 + parts.length * 350 + 100);
+            }
+          };
+        }
       },
       storage: {
         local: {

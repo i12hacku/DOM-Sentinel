@@ -22,6 +22,9 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 - DOM Sentinel logo as the extension icon (toolbar, extensions page, DevTools tab), with `icons/make-icons.ps1` to regenerate the sizes from the source logo.
 
 ### Changed
+- AI answers now stream into the panel as they are written, with a live timer and a **Stop** button.
+- Script generation asks the model to think less ("fast mode"), so scripts arrive much sooner. The setting each model accepts is detected automatically.
+- A model that doesn't start answering within 25 s, or stops for 20 s, is abandoned for the next one. A busy (503) model is retried once instead of three times.
 - The severity bar, counts and tab badge now leave out dismissed findings.
 - Markdown export lists each finding's review and moves dismissed findings to their own section. JSON export adds a `review` field to each finding.
 - "Explain and prioritise findings" no longer sends dismissed findings to the AI.

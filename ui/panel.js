@@ -742,23 +742,76 @@ async function writeElement() {
 
 // ---------- AI ----------
 
-async function aiExplain() {
-  $("aiOut").textContent = "Asking AI…";
-  try {
-    const excludeIds = (state.report?.findings || []).filter((f) => DISMISSED.has(statusOf(f))).map((f) => f.id);
-    const r = await send("AI_EXPLAIN", { excludeIds });
-    $("aiOut").textContent = `(${r.model})\n\n${r.text}`;
-  } catch (e) { $("aiOut").textContent = "✖ " + e.message; }
-}
+// Streams through a port to the background worker so text appears as it is
+// written, with a live timer and a Stop button. Only one AI request at a time.
+function startAi(kind) {
+  if (state.ai) { state.ai.stop(); return; }
+  if (state.tabId == null) return setStatus("No target tab.", true);
+  const task = $("aiTask").value;
+  if (kind === "script" && !task.trim()) { $("aiStatus").textContent = "Describe what the script should do first."; return; }
 
-async function aiScript() {
-  $("aiOut").textContent = "Generating…";
-  try {
-    const r = await send("AI_SCRIPT", { task: $("aiTask").value });
-    $("code").value = r.text;
-    $("aiOut").textContent = `Script generated with ${r.model}. Review it in the Console tab before running.`;
-    switchTab("console");
-  } catch (e) { $("aiOut").textContent = "✖ " + e.message; }
+  const btn = $(kind === "script" ? "aiScript" : "aiExplain");
+  const other = $(kind === "script" ? "aiExplain" : "aiScript");
+  const label = btn.textContent;
+  const out = $("aiOut");
+  const statusEl = $("aiStatus");
+  const t0 = performance.now();
+  const secs = () => ((performance.now() - t0) / 1000).toFixed(1);
+  let phase = "Connecting";
+  let text = "";
+  let firstText = null;
+
+  const port = chrome.runtime.connect({ name: "ai" });
+  const tick = setInterval(() => { statusEl.textContent = `${phase}… ${Math.floor((performance.now() - t0) / 1000)}s`; }, 250);
+  btn.textContent = "Stop";
+  btn.classList.add("is-running");
+  other.disabled = true;
+  out.textContent = "";
+
+  let ended = false;
+  const end = (msg) => {
+    if (ended) return;
+    ended = true;
+    clearInterval(tick);
+    try { port.disconnect(); } catch (_) { /* already closed */ }
+    state.ai = null;
+    btn.textContent = label;
+    btn.classList.remove("is-running");
+    other.disabled = false;
+    statusEl.textContent = msg;
+  };
+  state.ai = { stop: () => end(`Stopped after ${secs()}s.`) };
+
+  port.onMessage.addListener((m) => {
+    if (ended) return;
+    if (m.type === "status") phase = m.text;
+    else if (m.type === "reset") { text = ""; out.textContent = ""; }
+    else if (m.type === "text") {
+      if (firstText == null) { firstText = secs(); phase = "Writing"; }
+      text += m.text;
+      out.textContent = text;
+      out.scrollTop = out.scrollHeight;
+    } else if (m.type === "done") {
+      const timing = `${m.model} answered in ${secs()}s (first text after ${firstText ?? secs()}s).`;
+      if (kind === "script") {
+        $("code").value = m.text;
+        out.textContent = "";
+        end(`Script ready. ${timing}`);
+        setStatus("Script ready in the Console tab. Review it before you run it.");
+        switchTab("console");
+      } else {
+        out.textContent = m.text;
+        end(timing);
+      }
+    } else if (m.type === "error") {
+      out.textContent = "✖ " + m.error;
+      end(`Failed after ${secs()}s.`);
+    }
+  });
+  port.onDisconnect.addListener(() => end("The background worker stopped. Try again."));
+
+  const excludeIds = (state.report?.findings || []).filter((f) => DISMISSED.has(statusOf(f))).map((f) => f.id);
+  port.postMessage({ kind, tabId: state.tabId, task, excludeIds });
 }
 
 // ---------- settings ----------
@@ -887,8 +940,9 @@ function wire() {
   $("revealInElements").addEventListener("click", () => showInElements($("selector").value.trim()));
   $("writeBtn").addEventListener("click", writeElement);
 
-  $("aiExplain").addEventListener("click", () => busy($("aiExplain"), aiExplain));
-  $("aiScript").addEventListener("click", () => busy($("aiScript"), aiScript));
+  $("aiExplain").addEventListener("click", () => startAi("explain"));
+  $("aiScript").addEventListener("click", () => startAi("script"));
+  $("aiTask").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); startAi("script"); } });
   $("saveSettings").addEventListener("click", saveSettings);
   $("testAi").addEventListener("click", () => busy($("testAi"), async () => {
     $("settingsStatus").textContent = "Testing…";

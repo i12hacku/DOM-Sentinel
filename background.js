@@ -2,7 +2,7 @@ import {
   analyzeHeaders, analyzeCookies, scanSecrets, scanCodePatterns, extractEndpoints,
   analyzeLibraries, analyzeConsole, ACTIVE_PROBES
 } from "./lib/rules.js";
-import { callAi, explainPrompt, scriptPrompt, stripFences } from "./lib/ai.js";
+import { callAi, streamAi, explainPrompt, scriptPrompt, stripFences } from "./lib/ai.js";
 
 const SEV_ORDER = { high: 0, medium: 1, low: 2, info: 3 };
 const MAX_EXTERNAL_SCRIPTS = 40;
@@ -59,6 +59,41 @@ const handlers = {
   },
   AI_TEST: () => callAi("Reply with exactly: OK", { maxOutputTokens: 2048 })
 };
+
+// Streaming AI: the panel opens a port named "ai", sends one request, and receives
+// { type: "status" | "text" | "reset" | "done" | "error" } messages. Closing the port cancels.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "ai") return;
+  const ctrl = new AbortController();
+  port.onDisconnect.addListener(() => ctrl.abort());
+  const post = (m) => { try { port.postMessage(m); } catch (_) { /* panel closed */ } };
+  port.onMessage.addListener(async (msg) => {
+    try {
+      const report = await handlers.GET_REPORT({ tabId: msg.tabId });
+      let prompt, opts;
+      const isScript = msg.kind === "script";
+      if (isScript) {
+        if (!msg.task?.trim()) throw new Error("Describe what the script should do.");
+        prompt = scriptPrompt(msg.task, report);
+        opts = { temperature: 0.25, maxOutputTokens: 4096, fast: true };
+      } else {
+        if (!report) throw new Error("Run a scan first.");
+        const skip = new Set(Array.isArray(msg.excludeIds) ? msg.excludeIds : []);
+        prompt = explainPrompt({ ...report, findings: report.findings.filter((f) => !skip.has(f.id)) });
+        opts = { temperature: 0.2, fast: Boolean(msg.fast) };
+      }
+      const res = await streamAi(prompt, opts, {
+        signal: ctrl.signal,
+        onText: (text) => post({ type: "text", text }),
+        onStatus: (text) => post({ type: "status", text }),
+        onReset: () => post({ type: "reset" })
+      });
+      post({ type: "done", model: res.model, text: isScript ? stripFences(res.text) : res.text });
+    } catch (e) {
+      if (!ctrl.signal.aborted) post({ type: "error", error: e.message || String(e) });
+    }
+  });
+});
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = handlers[msg?.type];
